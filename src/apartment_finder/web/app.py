@@ -7,15 +7,27 @@ from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder='static')
 
-DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "listings.db"
+# Try multiple paths to find the database
+def find_db_path():
+    possible_paths = [
+        Path(__file__).parent.parent.parent.parent / "data" / "listings.db",
+        Path.cwd() / "data" / "listings.db",
+        Path.home() / "Documents" / "projects" / "findapartment" / "data" / "listings.db",
+    ]
+    for path in possible_paths:
+        if path.exists():
+            return path
+    return possible_paths[0]  # Return first path as default
+
+DB_PATH = find_db_path()
 
 # Sample data for demo/testing when no database exists
 SAMPLE_LISTINGS = [
-    {"source_id": "demo_1", "source_name": "craigslist", "city": "New York City", "title": "Spacious 1BR in Brooklyn Heights", "price_usd": 2800, "url": "#", "first_seen_at": "2025-01-30", "last_seen_at": "2025-01-30", "sent_in_email": 0},
-    {"source_id": "demo_2", "source_name": "streeteasy", "city": "New York City", "title": "Modern Studio in Williamsburg", "price_usd": 2400, "url": "#", "first_seen_at": "2025-01-29", "last_seen_at": "2025-01-30", "sent_in_email": 0},
-    {"source_id": "demo_3", "source_name": "findproperties", "city": "Dubai", "title": "1BR Apartment in Dubai Marina", "price_usd": 1800, "url": "#", "first_seen_at": "2025-01-28", "last_seen_at": "2025-01-30", "sent_in_email": 0},
-    {"source_id": "demo_4", "source_name": "renthop", "city": "New York City", "title": "Cozy 2BR in East Village", "price_usd": 3500, "url": "#", "first_seen_at": "2025-01-27", "last_seen_at": "2025-01-30", "sent_in_email": 0},
-    {"source_id": "demo_5", "source_name": "findproperties", "city": "Dubai", "title": "Luxury Studio in Downtown Dubai", "price_usd": 2200, "url": "#", "first_seen_at": "2025-01-26", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+    {"source_id": "demo_1", "source_name": "craigslist", "city": "New York City", "title": "Spacious 1BR in Brooklyn Heights", "price_usd": 2800, "url": "#", "first_seen_at": "2025-01-30", "last_seen_at": "2025-01-30", "sent_in_email": 0, "latitude": 40.6958, "longitude": -73.9936},
+    {"source_id": "demo_2", "source_name": "streeteasy", "city": "New York City", "title": "Modern Studio in Williamsburg", "price_usd": 2400, "url": "#", "first_seen_at": "2025-01-29", "last_seen_at": "2025-01-30", "sent_in_email": 0, "latitude": 40.7081, "longitude": -73.9571},
+    {"source_id": "demo_3", "source_name": "findproperties", "city": "Dubai", "title": "1BR Apartment in Dubai Marina", "price_usd": 1800, "url": "#", "first_seen_at": "2025-01-28", "last_seen_at": "2025-01-30", "sent_in_email": 0, "latitude": 25.0805, "longitude": 55.1403},
+    {"source_id": "demo_4", "source_name": "renthop", "city": "New York City", "title": "Cozy 2BR in East Village", "price_usd": 3500, "url": "#", "first_seen_at": "2025-01-27", "last_seen_at": "2025-01-30", "sent_in_email": 0, "latitude": 40.7264, "longitude": -73.9818},
+    {"source_id": "demo_5", "source_name": "findproperties", "city": "Dubai", "title": "Luxury Studio in Downtown Dubai", "price_usd": 2200, "url": "#", "first_seen_at": "2025-01-26", "last_seen_at": "2025-01-30", "sent_in_email": 0, "latitude": 25.1972, "longitude": 55.2744},
 ]
 
 

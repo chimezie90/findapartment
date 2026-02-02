@@ -2,24 +2,27 @@
 
 import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 
 app = Flask(__name__, static_folder='static')
 
-# Try multiple paths to find the database
-def find_db_path():
+# Database path - use data directory relative to project root
+def get_db_path():
+    """Get the database path, trying multiple locations."""
     possible_paths = [
         Path(__file__).parent.parent.parent.parent / "data" / "listings.db",
         Path.cwd() / "data" / "listings.db",
-        Path.home() / "Documents" / "projects" / "findapartment" / "data" / "listings.db",
     ]
     for path in possible_paths:
         if path.exists():
             return path
-    return possible_paths[0]  # Return first path as default
+    # Return first path as default (will be created if needed)
+    return possible_paths[0]
 
-DB_PATH = find_db_path()
+DB_PATH = get_db_path()
 
 # Sample data for demo/testing when no database exists
 SAMPLE_LISTINGS = [
@@ -31,31 +34,65 @@ SAMPLE_LISTINGS = [
 ]
 
 
+def init_db():
+    """Initialize the database if it doesn't exist."""
+    db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seen_listings (
+            source_id TEXT PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            city TEXT NOT NULL,
+            title TEXT,
+            price_usd REAL,
+            url TEXT,
+            first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_in_email BOOLEAN DEFAULT FALSE,
+            sent_at TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_city_source ON seen_listings(city, source_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_last_seen ON seen_listings(last_seen_at)")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
 def get_listings():
     """Fetch all listings from the database."""
-    if not DB_PATH.exists():
+    db_path = get_db_path()
+    if not db_path.exists():
         return SAMPLE_LISTINGS
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    cursor = conn.execute("""
-        SELECT
-            source_id,
-            source_name,
-            city,
-            title,
-            price_usd,
-            url,
-            first_seen_at,
-            last_seen_at,
-            sent_in_email
-        FROM seen_listings
-        ORDER BY first_seen_at DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("""
+            SELECT
+                source_id,
+                source_name,
+                city,
+                title,
+                price_usd,
+                url,
+                first_seen_at,
+                last_seen_at,
+                sent_in_email
+            FROM seen_listings
+            ORDER BY first_seen_at DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
 
-    return [dict(row) for row in rows]
+        if not rows:
+            return SAMPLE_LISTINGS
+        return [dict(row) for row in rows]
+    except Exception as e:
+        print(f"Database error: {e}")
+        return SAMPLE_LISTINGS
 
 
 @app.route('/')
@@ -86,15 +123,70 @@ def api_stats():
         cities[city] = cities.get(city, 0) + 1
         sources[source] = sources.get(source, 0) + 1
 
+    # Check if using sample data
+    is_demo = len(listings) > 0 and listings[0].get('source_id', '').startswith('demo_')
+
     return jsonify({
         'total': len(listings),
         'by_city': cities,
-        'by_source': sources
+        'by_source': sources,
+        'is_demo': is_demo
     })
+
+
+@app.route('/api/fetch', methods=['POST'])
+def api_fetch():
+    """Trigger a fetch of new listings (works on Replit for Craigslist/FindProperties)."""
+    data = request.get_json() or {}
+    city = data.get('city', 'nyc')
+    source = data.get('source', 'craigslist')
+
+    # Only allow sources that work without a headed browser
+    allowed_sources = ['craigslist', 'findproperties']
+    if source not in allowed_sources:
+        return jsonify({
+            'success': False,
+            'error': f'Source {source} requires a headed browser and cannot run on Replit. Try: {", ".join(allowed_sources)}'
+        }), 400
+
+    try:
+        # Initialize database first
+        init_db()
+
+        # Run the main scraper
+        result = subprocess.run(
+            [sys.executable, '-m', 'apartment_finder.main', '--city', city, '--source', source],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(Path(__file__).parent.parent.parent.parent)
+        )
+
+        return jsonify({
+            'success': result.returncode == 0,
+            'stdout': result.stdout,
+            'stderr': result.stderr
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            'success': False,
+            'error': 'Fetch timed out after 2 minutes'
+        }), 504
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# Initialize database on startup
+with app.app_context():
+    init_db()
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"Database: {DB_PATH}")
+    db_path = init_db()
+    print(f"Database: {db_path}")
     print(f"Starting server at http://0.0.0.0:{port}")
     app.run(host='0.0.0.0', port=port, debug=True)

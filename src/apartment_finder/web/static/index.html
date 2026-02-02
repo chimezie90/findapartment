@@ -330,6 +330,60 @@
                 height: 400px;
             }
         }
+
+        /* Demo banner */
+        .demo-banner {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .demo-banner.visible {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .demo-banner p {
+            margin: 0;
+            color: #856404;
+        }
+
+        .fetch-btn {
+            padding: 10px 20px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: background 0.2s;
+        }
+
+        .fetch-btn:hover {
+            background: #218838;
+        }
+
+        .fetch-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .fetch-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .fetch-controls select {
+            padding: 8px 12px;
+            min-width: 120px;
+        }
     </style>
 </head>
 <body>
@@ -341,6 +395,21 @@
     </header>
 
     <div class="container">
+        <div class="demo-banner" id="demoBanner">
+            <p>Showing sample data. Fetch real listings to populate the database.</p>
+            <div class="fetch-controls">
+                <select id="fetchCity">
+                    <option value="nyc">NYC</option>
+                    <option value="dubai">Dubai</option>
+                </select>
+                <select id="fetchSource">
+                    <option value="craigslist">Craigslist</option>
+                    <option value="findproperties">FindProperties</option>
+                </select>
+                <button class="fetch-btn" id="fetchBtn" onclick="fetchNewListings()">Fetch Listings</button>
+            </div>
+        </div>
+
         <div class="controls">
             <div class="control-group">
                 <label>Filter by City</label>
@@ -396,6 +465,7 @@
         let map = null;
         let markers = [];
         let currentView = 'list';
+        let isDemo = false;
 
         // City center coordinates for fallback positioning
         const cityCenters = {
@@ -412,6 +482,7 @@
                 populateFilters();
                 renderListings();
                 updateStats();
+                checkDemoMode();
                 if (currentView === 'map') {
                     renderMap();
                 }
@@ -423,6 +494,58 @@
                         <p>${error.message}</p>
                     </div>
                 `;
+            }
+        }
+
+        async function checkDemoMode() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                isDemo = stats.is_demo || false;
+                const banner = document.getElementById('demoBanner');
+                if (isDemo) {
+                    banner.classList.add('visible');
+                } else {
+                    banner.classList.remove('visible');
+                }
+            } catch (error) {
+                console.error('Error checking demo mode:', error);
+            }
+        }
+
+        async function fetchNewListings() {
+            const btn = document.getElementById('fetchBtn');
+            const city = document.getElementById('fetchCity').value;
+            const source = document.getElementById('fetchSource').value;
+
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+
+            try {
+                const response = await fetch('/api/fetch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ city, source })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    btn.textContent = 'Success! Refreshing...';
+                    setTimeout(() => {
+                        fetchListings();
+                        btn.textContent = 'Fetch Listings';
+                        btn.disabled = false;
+                    }, 1000);
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                    btn.textContent = 'Fetch Listings';
+                    btn.disabled = false;
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                btn.textContent = 'Fetch Listings';
+                btn.disabled = false;
             }
         }
 

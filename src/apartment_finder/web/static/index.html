@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apartment Finder</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            margin-bottom: 5px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        select, input {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+            min-width: 150px;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .listings {
+            display: grid;
+            gap: 15px;
+        }
+
+        .listing {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 15px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .listing:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .listing-main {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .listing-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .listing-title a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .listing-title a:hover {
+            color: #3498db;
+        }
+
+        .listing-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .listing-meta span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .listing-price {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #27ae60;
+            text-align: right;
+        }
+
+        .listing-source {
+            font-size: 0.8rem;
+            color: #999;
+            text-transform: uppercase;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .tag-nyc { background: #e8f4f8; color: #2980b9; }
+        .tag-dubai { background: #fef3e2; color: #e67e22; }
+        .tag-lisbon { background: #eafaf1; color: #27ae60; }
+
+        .tag-craigslist { background: #f3e5f5; color: #8e24aa; }
+        .tag-streeteasy { background: #e3f2fd; color: #1565c0; }
+        .tag-renthop { background: #fff3e0; color: #ef6c00; }
+        .tag-findproperties { background: #e8f5e9; color: #2e7d32; }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state h2 {
+            margin-bottom: 10px;
+        }
+
+        .count-badge {
+            background: #3498db;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .listing {
+                grid-template-columns: 1fr;
+            }
+
+            .listing-price {
+                text-align: left;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .control-group {
+                width: 100%;
+            }
+
+            select, input {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>🏠 Apartment Finder</h1>
+            <div class="stats" id="stats">Loading...</div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="controls">
+            <div class="control-group">
+                <label>Filter by City</label>
+                <select id="cityFilter">
+                    <option value="">All Cities</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Filter by Source</label>
+                <select id="sourceFilter">
+                    <option value="">All Sources</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Sort by</label>
+                <select id="sortBy">
+                    <option value="date-desc">Newest First</option>
+                    <option value="date-asc">Oldest First</option>
+                    <option value="price-asc">Price: Low to High</option>
+                    <option value="price-desc">Price: High to Low</option>
+                    <option value="title-asc">Title: A-Z</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Search</label>
+                <input type="text" id="searchInput" placeholder="Search listings...">
+            </div>
+        </div>
+
+        <div id="listingsContainer" class="listings">
+            <div class="empty-state">
+                <h2>Loading listings...</h2>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allListings = [];
+
+        async function fetchListings() {
+            try {
+                const response = await fetch('/api/listings');
+                allListings = await response.json();
+                populateFilters();
+                renderListings();
+                updateStats();
+            } catch (error) {
+                console.error('Error fetching listings:', error);
+                document.getElementById('listingsContainer').innerHTML = `
+                    <div class="empty-state">
+                        <h2>Error loading listings</h2>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function populateFilters() {
+            const cities = [...new Set(allListings.map(l => l.city))].sort();
+            const sources = [...new Set(allListings.map(l => l.source_name))].sort();
+
+            const cityFilter = document.getElementById('cityFilter');
+            cities.forEach(city => {
+                const option = document.createElement('option');
+                option.value = city;
+                option.textContent = city;
+                cityFilter.appendChild(option);
+            });
+
+            const sourceFilter = document.getElementById('sourceFilter');
+            sources.forEach(source => {
+                const option = document.createElement('option');
+                option.value = source;
+                option.textContent = source;
+                sourceFilter.appendChild(option);
+            });
+        }
+
+        function getFilteredListings() {
+            const cityFilter = document.getElementById('cityFilter').value;
+            const sourceFilter = document.getElementById('sourceFilter').value;
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const sortBy = document.getElementById('sortBy').value;
+
+            let filtered = allListings.filter(listing => {
+                if (cityFilter && listing.city !== cityFilter) return false;
+                if (sourceFilter && listing.source_name !== sourceFilter) return false;
+                if (searchTerm && !listing.title?.toLowerCase().includes(searchTerm)) return false;
+                return true;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                switch (sortBy) {
+                    case 'date-desc':
+                        return new Date(b.first_seen_at) - new Date(a.first_seen_at);
+                    case 'date-asc':
+                        return new Date(a.first_seen_at) - new Date(b.first_seen_at);
+                    case 'price-asc':
+                        return (a.price_usd || 0) - (b.price_usd || 0);
+                    case 'price-desc':
+                        return (b.price_usd || 0) - (a.price_usd || 0);
+                    case 'title-asc':
+                        return (a.title || '').localeCompare(b.title || '');
+                    default:
+                        return 0;
+                }
+            });
+
+            return filtered;
+        }
+
+        function formatPrice(price) {
+            if (!price) return 'Price N/A';
+            return '$' + price.toLocaleString('en-US', { maximumFractionDigits: 0 }) + '/mo';
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function getCityClass(city) {
+            if (city?.includes('New York') || city?.includes('NYC')) return 'tag-nyc';
+            if (city?.includes('Dubai')) return 'tag-dubai';
+            if (city?.includes('Lisbon')) return 'tag-lisbon';
+            return '';
+        }
+
+        function getSourceClass(source) {
+            return `tag-${source?.toLowerCase() || ''}`;
+        }
+
+        function renderListings() {
+            const filtered = getFilteredListings();
+            const container = document.getElementById('listingsContainer');
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h2>No listings found</h2>
+                        <p>Try adjusting your filters</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = filtered.map(listing => `
+                <div class="listing">
+                    <div class="listing-main">
+                        <div class="listing-title">
+                            <a href="${listing.url}" target="_blank" rel="noopener">
+                                ${escapeHtml(listing.title || 'Untitled')}
+                            </a>
+                        </div>
+                        <div class="listing-meta">
+                            <span class="tag ${getCityClass(listing.city)}">${escapeHtml(listing.city || 'Unknown')}</span>
+                            <span class="tag ${getSourceClass(listing.source_name)}">${escapeHtml(listing.source_name || 'Unknown')}</span>
+                            <span>📅 ${formatDate(listing.first_seen_at)}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="listing-price">${formatPrice(listing.price_usd)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateStats() {
+            const filtered = getFilteredListings();
+            const stats = document.getElementById('stats');
+
+            const cities = {};
+            filtered.forEach(l => {
+                cities[l.city] = (cities[l.city] || 0) + 1;
+            });
+
+            const cityStats = Object.entries(cities)
+                .map(([city, count]) => `${city}: ${count}`)
+                .join(' | ');
+
+            stats.innerHTML = `
+                <span>Total: ${filtered.length} listings</span>
+                <span>${cityStats}</span>
+            `;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Event listeners
+        document.getElementById('cityFilter').addEventListener('change', () => {
+            renderListings();
+            updateStats();
+        });
+
+        document.getElementById('sourceFilter').addEventListener('change', () => {
+            renderListings();
+            updateStats();
+        });
+
+        document.getElementById('sortBy').addEventListener('change', renderListings);
+
+        document.getElementById('searchInput').addEventListener('input', () => {
+            renderListings();
+            updateStats();
+        });
+
+        // Initial load
+        fetchListings();
+    </script>
+</body>
+</html>

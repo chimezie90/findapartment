@@ -1,0 +1,55 @@
+# Apartment Finder Configuration Template
+# Copy this to config.yaml and customize your settings
+
+search:
+  budget:
+    min_usd: 2500
+    max_usd: 4000
+
+  size:
+    min_sqft: 700
+    bedrooms:
+      min: 1
+      max: 2
+
+  must_have:
+    - laundry
+    - dishwasher
+
+  preferences:
+    - quiet_neighborhood
+
+cities:
+  nyc:
+    display_name: "New York City"
+    currency: USD
+    sources:
+      - craigslist
+    craigslist:
+      site: newyork
+      areas:
+        - mnh
+        - brk
+
+  dubai:
+    display_name: "Dubai"
+    currency: AED
+    sources:
+      - bayut
+    bayut:
+      location_ids:
+        - "5002"
+
+email:
+  enabled: true
+  recipients:
+    - your_email@example.com
+  top_picks_per_city: 3
+
+scoring:
+  weights:
+    price: 0.30
+    size: 0.20
+    amenities: 0.25
+    location: 0.15
+    freshness: 0.10

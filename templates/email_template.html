@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apartment Finder Daily Digest</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #1f2937;
+            margin: 0;
+            padding: 0;
+            background-color: #f3f4f6;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: white;
+            padding: 24px;
+            border-radius: 12px 12px 0 0;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .header p {
+            margin: 8px 0 0 0;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        .content {
+            background: white;
+            padding: 24px;
+            border-radius: 0 0 12px 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .summary {
+            text-align: center;
+            padding: 16px 0;
+            border-bottom: 1px solid #e5e7eb;
+            margin-bottom: 20px;
+        }
+        .summary strong {
+            color: #2563eb;
+            font-size: 24px;
+        }
+        .city-section {
+            margin: 24px 0;
+        }
+        .city-header {
+            background: #f3f4f6;
+            padding: 12px 16px;
+            font-weight: 600;
+            font-size: 16px;
+            border-radius: 8px 8px 0 0;
+            border-bottom: 2px solid #2563eb;
+        }
+        .city-count {
+            font-weight: normal;
+            color: #6b7280;
+            font-size: 14px;
+        }
+        .listing {
+            padding: 16px;
+            border: 1px solid #e5e7eb;
+            border-top: none;
+            background: white;
+        }
+        .listing:last-child {
+            border-radius: 0 0 8px 8px;
+        }
+        .listing-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        .listing-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+            flex: 1;
+            padding-right: 12px;
+        }
+        .listing-score {
+            background: #dbeafe;
+            color: #1d4ed8;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .listing-price {
+            font-size: 20px;
+            color: #059669;
+            font-weight: 700;
+            margin: 8px 0;
+        }
+        .listing-details {
+            color: #6b7280;
+            font-size: 14px;
+            margin: 8px 0;
+        }
+        .amenities {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 12px 0;
+        }
+        .amenity {
+            background: #f3f4f6;
+            color: #4b5563;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .view-btn {
+            display: inline-block;
+            background: #2563eb;
+            color: white !important;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        .view-btn:hover {
+            background: #1d4ed8;
+        }
+        .footer {
+            text-align: center;
+            color: #9ca3af;
+            font-size: 12px;
+            margin-top: 24px;
+            padding: 16px;
+        }
+        .footer p {
+            margin: 4px 0;
+        }
+        .criteria {
+            background: #f9fafb;
+            padding: 8px 12px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 8px;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                padding: 12px;
+            }
+            .header, .content {
+                padding: 16px;
+            }
+            .listing-header {
+                flex-direction: column;
+            }
+            .listing-score {
+                margin-top: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Apartment Finder</h1>
+            <p>Daily Digest - {{ date }}</p>
+        </div>
+
+        <div class="content">
+            <div class="summary">
+                <p>Found <strong>{{ total_listings }}</strong> new listing{{ 's' if total_listings != 1 else '' }} matching your criteria</p>
+            </div>
+
+            {% for city in cities %}
+            <div class="city-section">
+                <div class="city-header">
+                    {{ city.name }}
+                    <span class="city-count">({{ city.listings|length }} of {{ city.total_found }} shown)</span>
+                </div>
+
+                {% for apt in city.listings %}
+                <div class="listing">
+                    <div class="listing-header">
+                        <h3 class="listing-title">{{ apt.title[:60] }}{% if apt.title|length > 60 %}...{% endif %}</h3>
+                        <span class="listing-score">Score: {{ apt.score }}</span>
+                    </div>
+
+                    <div class="listing-price">{{ apt.display_price() }}</div>
+
+                    <div class="listing-details">
+                        {{ apt.display_size() }}
+                        {% if apt.neighborhood %} &bull; {{ apt.neighborhood }}{% endif %}
+                    </div>
+
+                    {% if apt.amenities.to_list() %}
+                    <div class="amenities">
+                        {% for amenity in apt.amenities.to_list()[:6] %}
+                        <span class="amenity">{{ amenity }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    <a href="{{ apt.url }}" class="view-btn">View Listing &rarr;</a>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="footer">
+            <p>You're receiving this because you subscribed to Apartment Finder alerts.</p>
+            <div class="criteria">Budget: $2,500 - $4,000 | Size: 700+ sqft | 1-2 BR</div>
+        </div>
+    </div>
+</body>
+</html>

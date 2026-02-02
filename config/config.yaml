@@ -1,0 +1,79 @@
+# Apartment Finder Configuration
+# Customize your search criteria and notification preferences
+
+search:
+  # Budget range in USD (will be converted to local currency for each city)
+  budget:
+    min_usd: 2500
+    max_usd: 4000
+
+  # Size requirements
+  size:
+    min_sqft: 700
+    bedrooms:
+      min: 1
+      max: 2
+
+  # Must-have amenities (listings without these will be filtered out)
+  # Options: laundry, dishwasher, parking, gym, doorman, elevator, pets, a/c
+  # Note: Craigslist basic search doesn't include amenity info
+  must_have: []
+
+  # Preferences (used for scoring, not filtering)
+  # Options: quiet_neighborhood
+  preferences:
+    - quiet_neighborhood
+
+# Cities to search (add/remove as needed)
+cities:
+  nyc:
+    display_name: "New York City"
+    currency: USD
+    sources:
+      - craigslist
+      - streeteasy
+      - renthop
+    craigslist:
+      site: newyork
+      # Areas: mnh=Manhattan, brk=Brooklyn, que=Queens, brx=Bronx, stn=Staten Island
+      areas:
+        - mnh
+        - brk
+    streeteasy:
+      areas:
+        - nyc
+
+  dubai:
+    display_name: "Dubai"
+    currency: AED
+    sources:
+      - findproperties
+    findproperties:
+      emirate: dubai
+
+  lisbon:
+    display_name: "Lisbon"
+    currency: EUR
+    sources:
+      - idealista
+    idealista:
+      country: pt
+      center: "38.7223,-9.1393"
+      distance: 10000  # meters from center
+
+# Email delivery settings
+email:
+  enabled: true
+  recipients:
+    - ""  # TODO: Add your Gmail address here (same as SMTP_USER in .env)
+  top_picks_per_city: 3
+
+# Scoring weights (must sum to 1.0)
+# Adjust these to prioritize what matters most to you
+scoring:
+  weights:
+    price: 0.30      # Lower price = higher score
+    size: 0.20       # Larger = better
+    amenities: 0.25  # Bonus amenities beyond must-haves
+    location: 0.15   # Quiet neighborhood signals
+    freshness: 0.10  # Newer listings preferred

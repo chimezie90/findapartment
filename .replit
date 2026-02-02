@@ -1,11 +1,13 @@
 run = "python -m apartment_finder.web.app"
 entrypoint = "src/apartment_finder/web/app.py"
+modules = ["python-3.12", "web", "nix"]
 
 [env]
 PYTHONPATH = "${REPL_HOME}/src"
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
+packages = ["libyaml"]
 
 [deployment]
 run = ["python", "-m", "apartment_finder.web.app"]

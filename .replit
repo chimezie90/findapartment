@@ -1,0 +1,16 @@
+run = "python -m apartment_finder.web.app"
+entrypoint = "src/apartment_finder/web/app.py"
+
+[env]
+PYTHONPATH = "${REPL_HOME}/src"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["python", "-m", "apartment_finder.web.app"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 5000
+externalPort = 80

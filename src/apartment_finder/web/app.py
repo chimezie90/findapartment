@@ -1,5 +1,6 @@
 """Simple web viewer for apartment listings."""
 
+import os
 import sqlite3
 from pathlib import Path
 from flask import Flask, jsonify, send_from_directory
@@ -8,11 +9,20 @@ app = Flask(__name__, static_folder='static')
 
 DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "listings.db"
 
+# Sample data for demo/testing when no database exists
+SAMPLE_LISTINGS = [
+    {"source_id": "demo_1", "source_name": "craigslist", "city": "New York City", "title": "Spacious 1BR in Brooklyn Heights", "price_usd": 2800, "url": "#", "first_seen_at": "2025-01-30", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+    {"source_id": "demo_2", "source_name": "streeteasy", "city": "New York City", "title": "Modern Studio in Williamsburg", "price_usd": 2400, "url": "#", "first_seen_at": "2025-01-29", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+    {"source_id": "demo_3", "source_name": "findproperties", "city": "Dubai", "title": "1BR Apartment in Dubai Marina", "price_usd": 1800, "url": "#", "first_seen_at": "2025-01-28", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+    {"source_id": "demo_4", "source_name": "renthop", "city": "New York City", "title": "Cozy 2BR in East Village", "price_usd": 3500, "url": "#", "first_seen_at": "2025-01-27", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+    {"source_id": "demo_5", "source_name": "findproperties", "city": "Dubai", "title": "Luxury Studio in Downtown Dubai", "price_usd": 2200, "url": "#", "first_seen_at": "2025-01-26", "last_seen_at": "2025-01-30", "sent_in_email": 0},
+]
+
 
 def get_listings():
     """Fetch all listings from the database."""
     if not DB_PATH.exists():
-        return []
+        return SAMPLE_LISTINGS
 
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -72,6 +82,7 @@ def api_stats():
 
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     print(f"Database: {DB_PATH}")
-    print(f"Starting server at http://localhost:5000")
-    app.run(debug=True, port=5000)
+    print(f"Starting server at http://0.0.0.0:{port}")
+    app.run(host='0.0.0.0', port=port, debug=True)

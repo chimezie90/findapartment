@@ -50,3 +50,27 @@ command = "python -m apartment_finder.main --city dubai --source findproperties"
 name = "fetch-dubai-evening"
 cron = "10 20 * * *"
 command = "python -m apartment_finder.main --city dubai --source findproperties"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Apartment Finder"
+
+[[workflows.workflow]]
+name = "Apartment Finder"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace && python3.11 -m apartment_finder.web.app"
+waitForPort = 5000

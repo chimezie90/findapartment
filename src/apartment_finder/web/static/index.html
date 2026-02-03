@@ -674,12 +674,10 @@
             }
 
             container.innerHTML = filtered.map(listing => `
-                <div class="listing">
+                <div class="listing" onclick="window.location='/listing?id=${encodeURIComponent(listing.source_id)}'" style="cursor:pointer">
                     <div class="listing-main">
                         <div class="listing-title">
-                            <a href="${listing.url}" target="_blank" rel="noopener">
-                                ${escapeHtml(listing.title || 'Untitled')}
-                            </a>
+                            ${escapeHtml(listing.title || 'Untitled')}
                         </div>
                         <div class="listing-meta">
                             <span class="tag ${getCityClass(listing.city)}">${escapeHtml(listing.city || 'Unknown')}</span>

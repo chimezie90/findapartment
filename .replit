@@ -19,3 +19,34 @@ externalPort = 80
 
 [agent]
 expertMode = true
+
+# Scheduled tasks - runs twice daily at 8am and 8pm UTC
+[[scheduled]]
+name = "fetch-nyc-morning"
+cron = "0 8 * * *"
+command = "python -m apartment_finder.main --city nyc --source craigslist"
+
+[[scheduled]]
+name = "fetch-nyc-evening"
+cron = "0 20 * * *"
+command = "python -m apartment_finder.main --city nyc --source craigslist"
+
+[[scheduled]]
+name = "fetch-la-morning"
+cron = "5 8 * * *"
+command = "python -m apartment_finder.main --city la --source craigslist"
+
+[[scheduled]]
+name = "fetch-la-evening"
+cron = "5 20 * * *"
+command = "python -m apartment_finder.main --city la --source craigslist"
+
+[[scheduled]]
+name = "fetch-dubai-morning"
+cron = "10 8 * * *"
+command = "python -m apartment_finder.main --city dubai --source findproperties"
+
+[[scheduled]]
+name = "fetch-dubai-evening"
+cron = "10 20 * * *"
+command = "python -m apartment_finder.main --city dubai --source findproperties"

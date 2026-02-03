@@ -40,6 +40,7 @@ env/
 
 # Database
 data/*.db
+!data/seed_listings.json
 *.sqlite
 *.sqlite3
 

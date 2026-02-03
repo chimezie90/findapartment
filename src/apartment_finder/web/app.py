@@ -1,5 +1,6 @@
 """Simple web viewer for apartment listings."""
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -76,8 +77,53 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_listing ON comments(listing_id)")
 
     conn.commit()
+
+    # Load seed data if database is empty
+    cursor = conn.execute("SELECT COUNT(*) FROM seen_listings")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        load_seed_data(conn)
+
     conn.close()
     return db_path
+
+
+def load_seed_data(conn):
+    """Load seed listings from JSON file if available."""
+    seed_paths = [
+        Path(__file__).parent.parent.parent.parent / "data" / "seed_listings.json",
+        Path.cwd() / "data" / "seed_listings.json",
+    ]
+
+    for seed_path in seed_paths:
+        if seed_path.exists():
+            try:
+                with open(seed_path, 'r') as f:
+                    listings = json.load(f)
+
+                for listing in listings:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO seen_listings
+                        (source_id, source_name, city, title, price_usd, url,
+                         first_seen_at, last_seen_at, sent_in_email)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        listing.get('source_id'),
+                        listing.get('source_name'),
+                        listing.get('city'),
+                        listing.get('title'),
+                        listing.get('price_usd'),
+                        listing.get('url'),
+                        listing.get('first_seen_at'),
+                        listing.get('last_seen_at'),
+                        listing.get('sent_in_email', 0)
+                    ))
+
+                conn.commit()
+                print(f"Loaded {len(listings)} seed listings from {seed_path}")
+                return
+            except Exception as e:
+                print(f"Error loading seed data: {e}")
 
 
 def get_db():

@@ -43,6 +43,19 @@ cities:
       areas:
         - nyc
 
+  la:
+    display_name: "Los Angeles"
+    currency: USD
+    sources:
+      - craigslist
+    craigslist:
+      site: losangeles
+      # Areas: wst=Westside, sfv=SF Valley, lac=Central LA, sgv=San Gabriel Valley, lgb=Long Beach
+      areas:
+        - wst
+        - lac
+        - sfv
+
   dubai:
     display_name: "Dubai"
     currency: AED

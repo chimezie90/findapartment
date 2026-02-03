@@ -31,6 +31,7 @@ class CraigslistAdapter(BaseAdapter):
         self.site = city_config.get("craigslist", {}).get("site", "newyork")
         self.areas = city_config.get("craigslist", {}).get("areas", [])
         self.rate_limit = config.get("rate_limit", 2)
+        self.city_name = city_config.get("display_name", "Unknown")
 
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
@@ -179,7 +180,7 @@ class CraigslistAdapter(BaseAdapter):
                 sqft=sqft,
                 address=None,
                 neighborhood=neighborhood,
-                city="New York",
+                city=self.city_name,
                 country="USA",
                 latitude=None,
                 longitude=None,

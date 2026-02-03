@@ -45,12 +45,14 @@ class ApartmentFinder:
             weights=ScoringWeights(**weights_config) if weights_config else None,
         )
 
-    def run(self, skip_email: bool = False) -> Dict[str, List[Apartment]]:
+    def run(self, skip_email: bool = False, only_city: str = None, only_source: str = None) -> Dict[str, List[Apartment]]:
         """
         Execute the full apartment finding pipeline.
 
         Args:
             skip_email: If True, skip sending email (useful for testing)
+            only_city: If set, only process this city key
+            only_source: If set, only use this source
 
         Returns:
             Dict mapping city names to lists of top apartments
@@ -60,11 +62,15 @@ class ApartmentFinder:
 
         # Process each city
         for city_key, city_config in self.config["cities"].items():
+            # Skip if filtering by city
+            if only_city and city_key != only_city:
+                continue
+
             display_name = city_config["display_name"]
             logger.info(f"Processing city: {display_name}")
 
             try:
-                apartments = self._process_city(city_key, city_config)
+                apartments = self._process_city(city_key, city_config, only_source)
                 results_by_city[display_name] = apartments
             except Exception as e:
                 logger.error(f"Failed to process {city_key}: {e}")
@@ -80,7 +86,7 @@ class ApartmentFinder:
         logger.info("Apartment finder run complete")
         return results_by_city
 
-    def _process_city(self, city_key: str, city_config: dict) -> List[Apartment]:
+    def _process_city(self, city_key: str, city_config: dict, only_source: str = None) -> List[Apartment]:
         """Process a single city: fetch, convert, score, dedupe."""
         all_apartments = []
 
@@ -107,6 +113,10 @@ class ApartmentFinder:
 
         # Fetch from each source configured for this city
         for source_name in city_config.get("sources", []):
+            # Skip if filtering by source
+            if only_source and source_name != only_source:
+                continue
+
             if source_name not in ADAPTER_REGISTRY:
                 logger.warning(f"Unknown source {source_name} for {city_key}")
                 continue
@@ -193,6 +203,14 @@ def main():
         help="Path to configuration file",
     )
     parser.add_argument(
+        "--city",
+        help="Only process this city (e.g., nyc, la, dubai)",
+    )
+    parser.add_argument(
+        "--source",
+        help="Only use this source (e.g., craigslist, findproperties)",
+    )
+    parser.add_argument(
         "--no-email",
         action="store_true",
         help="Skip sending email (useful for testing)",
@@ -247,7 +265,11 @@ def main():
     # Run the finder
     try:
         finder = ApartmentFinder(args.config)
-        results = finder.run(skip_email=args.no_email)
+        results = finder.run(
+            skip_email=args.no_email,
+            only_city=args.city,
+            only_source=args.source
+        )
 
         # Print summary
         print("\n=== Apartment Finder Results ===")

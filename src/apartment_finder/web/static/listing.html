@@ -123,9 +123,32 @@
 
         /* Map */
         #detailMap {
-            height: 300px;
+            height: 400px;
             border-radius: 8px;
             margin-bottom: 15px;
+        }
+
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 10px 0;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
         }
 
         /* Scores */
@@ -186,6 +209,17 @@
 
         .place-icon {
             margin-right: 8px;
+        }
+
+        .place-link {
+            color: #2c3e50;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .place-link:hover {
+            color: #3498db;
+            text-decoration: underline;
         }
 
         .no-places {
@@ -515,6 +549,14 @@
         <div class="card">
             <h2>Location & Walkability</h2>
             <div id="detailMap"></div>
+            <div class="map-legend" id="mapLegend">
+                <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Restaurants</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#3498db"></div> Gyms</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#9b59b6"></div> Ice Rinks</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#1abc9c"></div> Pilates</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#e67e22"></div> Basketball</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#27ae60"></div> Grocery</div>
+            </div>
             <div class="scores-grid" id="scoresGrid">
                 <div class="score-item">
                     <div class="score-value" id="walkScore">--</div>
@@ -598,7 +640,18 @@
         let map = null;
         let galleryImages = [];
         let currentImageIndex = 0;
+        let placeMarkers = []; // Store all place markers
         const listingId = new URLSearchParams(window.location.search).get('id');
+
+        // Marker colors for different place types
+        const markerColors = {
+            restaurant: '#e74c3c',
+            gym: '#3498db',
+            skating: '#9b59b6',
+            pilates: '#1abc9c',
+            basketball: '#e67e22',
+            grocery: '#27ae60'
+        };
 
         // City centers for fallback
         const cityCenters = {
@@ -867,7 +920,17 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
-            L.marker([coords.lat, coords.lng]).addTo(map);
+
+            // Custom marker for the apartment listing
+            const homeIcon = L.divIcon({
+                className: 'home-marker',
+                html: `<div style="background:#2c3e50;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 3px 6px rgba(0,0,0,0.4);font-size:18px;">🏠</div>`,
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+            L.marker([coords.lat, coords.lng], { icon: homeIcon })
+                .bindPopup(`<strong>This Listing</strong><br>${escapeHtml(listing.title || 'Apartment')}`)
+                .addTo(map);
 
             // Estimate walkability based on location
             estimateScores(coords);
@@ -918,15 +981,30 @@
         async function loadNearbyPlaces() {
             const coords = getCoords();
 
+            // Clear existing place markers
+            placeMarkers.forEach(m => map.removeLayer(m));
+            placeMarkers = [];
+
             // Load restaurants, gyms, skating rinks, pilates, basketball, and grocery
             await Promise.all([
-                loadPlaces('restaurantsList', coords, 'amenity', 'restaurant', '🍽️'),
-                loadPlaces('gymsList', coords, 'leisure', 'fitness_centre', '🏋️'),
-                loadPlaces('skatingList', coords, 'leisure', 'ice_rink', '⛸️'),
+                loadPlaces('restaurantsList', coords, 'amenity', 'restaurant', '🍽️', markerColors.restaurant),
+                loadPlaces('gymsList', coords, 'leisure', 'fitness_centre', '🏋️', markerColors.gym),
+                loadPlaces('skatingList', coords, 'leisure', 'ice_rink', '⛸️', markerColors.skating),
                 loadPilatesStudios('pilatesList', coords),
                 loadBasketballCourts('basketballList', coords),
                 loadGroceryStores('groceryList', coords)
             ]);
+
+            // Fit map to show all markers if we have places
+            if (placeMarkers.length > 0) {
+                const listingCoords = getCoords();
+                const allPoints = [[listingCoords.lat, listingCoords.lng]];
+                placeMarkers.forEach(m => {
+                    const latlng = m.getLatLng();
+                    allPoints.push([latlng.lat, latlng.lng]);
+                });
+                map.fitBounds(allPoints, { padding: [30, 30], maxZoom: 15 });
+            }
         }
 
         async function loadPilatesStudios(containerId, coords) {
@@ -958,7 +1036,7 @@
                         const placeLat = el.lat || el.center?.lat;
                         const placeLng = el.lon || el.center?.lon;
                         const distance = calculateDistance(coords.lat, coords.lng, placeLat, placeLng);
-                        return { name: el.tags.name, distance };
+                        return { name: el.tags.name, lat: placeLat, lng: placeLng, distance };
                     })
                     .sort((a, b) => a.distance - b.distance)
                     .slice(0, 5);
@@ -966,9 +1044,19 @@
                 if (places.length === 0) {
                     container.innerHTML = '<li class="no-places">No Pilates studios found nearby</li>';
                 } else {
+                    // Add markers to map
+                    places.forEach(place => {
+                        if (place.lat && place.lng) {
+                            addPlaceMarker(place, '🧘', markerColors.pilates);
+                        }
+                    });
+
                     container.innerHTML = places.map(place => `
                         <li>
-                            <span class="place-name"><span class="place-icon">🧘</span>${escapeHtml(place.name)}</span>
+                            <span class="place-name">
+                                <span class="place-icon">🧘</span>
+                                <a href="${getGoogleMapsUrl(place)}" target="_blank" rel="noopener" class="place-link">${escapeHtml(place.name)}</a>
+                            </span>
                             <span class="place-distance">${formatDistance(place.distance)}</span>
                         </li>
                     `).join('');
@@ -1006,7 +1094,7 @@
                         const placeLng = el.lon || el.center?.lon;
                         const distance = calculateDistance(coords.lat, coords.lng, placeLat, placeLng);
                         const name = el.tags?.name || 'Basketball Court';
-                        return { name, distance };
+                        return { name, lat: placeLat, lng: placeLng, distance };
                     })
                     .sort((a, b) => a.distance - b.distance)
                     .slice(0, 5);
@@ -1014,9 +1102,19 @@
                 if (places.length === 0) {
                     container.innerHTML = '<li class="no-places">No basketball courts found nearby</li>';
                 } else {
+                    // Add markers to map
+                    places.forEach(place => {
+                        if (place.lat && place.lng) {
+                            addPlaceMarker(place, '🏀', markerColors.basketball);
+                        }
+                    });
+
                     container.innerHTML = places.map(place => `
                         <li>
-                            <span class="place-name"><span class="place-icon">🏀</span>${escapeHtml(place.name)}</span>
+                            <span class="place-name">
+                                <span class="place-icon">🏀</span>
+                                <a href="${getGoogleMapsUrl(place)}" target="_blank" rel="noopener" class="place-link">${escapeHtml(place.name)}</a>
+                            </span>
                             <span class="place-distance">${formatDistance(place.distance)}</span>
                         </li>
                     `).join('');
@@ -1056,7 +1154,7 @@
                         const placeLat = el.lat || el.center?.lat;
                         const placeLng = el.lon || el.center?.lon;
                         const distance = calculateDistance(coords.lat, coords.lng, placeLat, placeLng);
-                        return { name: el.tags.name, distance };
+                        return { name: el.tags.name, lat: placeLat, lng: placeLng, distance };
                     })
                     .sort((a, b) => a.distance - b.distance)
                     .slice(0, 5);
@@ -1064,9 +1162,19 @@
                 if (places.length === 0) {
                     container.innerHTML = '<li class="no-places">No grocery stores found nearby</li>';
                 } else {
+                    // Add markers to map
+                    places.forEach(place => {
+                        if (place.lat && place.lng) {
+                            addPlaceMarker(place, '🛒', markerColors.grocery);
+                        }
+                    });
+
                     container.innerHTML = places.map(place => `
                         <li>
-                            <span class="place-name"><span class="place-icon">🛒</span>${escapeHtml(place.name)}</span>
+                            <span class="place-name">
+                                <span class="place-icon">🛒</span>
+                                <a href="${getGoogleMapsUrl(place)}" target="_blank" rel="noopener" class="place-link">${escapeHtml(place.name)}</a>
+                            </span>
                             <span class="place-distance">${formatDistance(place.distance)}</span>
                         </li>
                     `).join('');
@@ -1077,7 +1185,7 @@
             }
         }
 
-        async function loadPlaces(containerId, coords, key, value, icon) {
+        async function loadPlaces(containerId, coords, key, value, icon, markerColor) {
             const container = document.getElementById(containerId);
 
             try {
@@ -1106,6 +1214,8 @@
                         const distance = calculateDistance(coords.lat, coords.lng, placeLat, placeLng);
                         return {
                             name: el.tags.name,
+                            lat: placeLat,
+                            lng: placeLng,
                             distance: distance
                         };
                     })
@@ -1115,9 +1225,19 @@
                 if (places.length === 0) {
                     container.innerHTML = '<li class="no-places">No places found nearby</li>';
                 } else {
+                    // Add markers to map
+                    places.forEach(place => {
+                        if (place.lat && place.lng) {
+                            addPlaceMarker(place, icon, markerColor);
+                        }
+                    });
+
                     container.innerHTML = places.map(place => `
                         <li>
-                            <span class="place-name"><span class="place-icon">${icon}</span>${escapeHtml(place.name)}</span>
+                            <span class="place-name">
+                                <span class="place-icon">${icon}</span>
+                                <a href="${getGoogleMapsUrl(place)}" target="_blank" rel="noopener" class="place-link">${escapeHtml(place.name)}</a>
+                            </span>
                             <span class="place-distance">${formatDistance(place.distance)}</span>
                         </li>
                     `).join('');
@@ -1126,6 +1246,36 @@
                 console.error('Error loading places:', error);
                 container.innerHTML = '<li class="no-places">Could not load nearby places</li>';
             }
+        }
+
+        function addPlaceMarker(place, icon, color) {
+            if (!map || !place.lat || !place.lng) return;
+
+            const markerIcon = L.divIcon({
+                className: 'place-marker',
+                html: `<div style="background:${color};width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);font-size:14px;">${icon}</div>`,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+            });
+
+            const marker = L.marker([place.lat, place.lng], { icon: markerIcon })
+                .bindPopup(`
+                    <div style="min-width:150px;">
+                        <strong>${escapeHtml(place.name)}</strong><br>
+                        <span style="color:#666;font-size:0.9em;">${formatDistance(place.distance)} away</span><br>
+                        <a href="${getGoogleMapsUrl(place)}" target="_blank" rel="noopener" style="color:#3498db;">Open in Google Maps</a>
+                    </div>
+                `)
+                .addTo(map);
+
+            placeMarkers.push(marker);
+        }
+
+        function getGoogleMapsUrl(place) {
+            if (place.lat && place.lng) {
+                return `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`;
+            }
+            return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`;
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {

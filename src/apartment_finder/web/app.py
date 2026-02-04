@@ -375,19 +375,23 @@ def api_fetch():
     city = data.get('city', 'nyc')
     source = data.get('source', 'craigslist')
 
-    # Sources that work with direct scraping
-    scraper_sources = ['craigslist', 'findproperties', 'boligportal']
+    # Only allow sources that have working scrapers
+    working_scrapers = {
+        'nyc': 'craigslist',
+        'la': 'craigslist',
+        'dubai': 'findproperties',
+    }
+
+    if city not in working_scrapers:
+        return jsonify({
+            'success': False,
+            'error': f'No working scraper for {city} yet. Only NYC, LA, and Dubai have real listings.'
+        }), 400
+
+    source = working_scrapers[city]
 
     try:
         init_db()
-
-        # For sources without working scrapers, add sample data
-        if source not in scraper_sources:
-            count = add_sample_listings(city, source)
-            return jsonify({
-                'success': True,
-                'message': f'Added {count} sample listings for {city}'
-            })
 
         # Get project root
         project_root = Path(__file__).parent.parent.parent.parent
@@ -408,11 +412,9 @@ def api_fetch():
                 'stdout': result.stdout[-2000:] if result.stdout else ''
             })
         else:
-            # If scraper fails, add sample data as fallback
-            count = add_sample_listings(city, source)
             return jsonify({
-                'success': True,
-                'message': f'Scraper unavailable. Added {count} sample listings for {city}'
+                'success': False,
+                'error': result.stderr[-1000:] if result.stderr else 'Scraper failed'
             })
 
     except subprocess.TimeoutExpired:
@@ -425,54 +427,6 @@ def api_fetch():
             'success': False,
             'error': str(e)
         }), 500
-
-
-def add_sample_listings(city, source):
-    """Add sample listings for a city."""
-    import random
-
-    city_data = {
-        'nyc': {'display': 'New York City', 'lat': 40.7128, 'lng': -74.0060, 'neighborhoods': ['Manhattan', 'Brooklyn', 'Queens', 'Williamsburg', 'East Village']},
-        'la': {'display': 'Los Angeles', 'lat': 34.0522, 'lng': -118.2437, 'neighborhoods': ['Santa Monica', 'Venice', 'Hollywood', 'Silver Lake', 'Downtown']},
-        'dubai': {'display': 'Dubai', 'lat': 25.2048, 'lng': 55.2708, 'neighborhoods': ['Dubai Marina', 'Downtown', 'JBR', 'Business Bay', 'Palm Jumeirah']},
-        'lisbon': {'display': 'Lisbon', 'lat': 38.7223, 'lng': -9.1393, 'neighborhoods': ['Alfama', 'Baixa', 'Bairro Alto', 'Belém', 'Graça']},
-        'copenhagen': {'display': 'Copenhagen', 'lat': 55.6761, 'lng': 12.5683, 'neighborhoods': ['Frederiksberg', 'Vesterbro', 'Nørrebro', 'Østerbro', 'City Center']},
-        'bali': {'display': 'Bali', 'lat': -8.4095, 'lng': 115.1889, 'neighborhoods': ['Canggu', 'Seminyak', 'Ubud', 'Uluwatu', 'Sanur']},
-    }
-
-    info = city_data.get(city, city_data['nyc'])
-    conn = get_db()
-    count = 0
-
-    for i in range(5):
-        neighborhood = random.choice(info['neighborhoods'])
-        price = random.randint(1500, 4000)
-        bedrooms = random.choice(['Studio', '1BR', '2BR'])
-        source_id = f"{source}_{city}_{random.randint(10000, 99999)}"
-
-        # Check if already exists
-        existing = conn.execute("SELECT 1 FROM seen_listings WHERE source_id = ?", (source_id,)).fetchone()
-        if existing:
-            continue
-
-        conn.execute("""
-            INSERT INTO seen_listings (source_id, source_name, city, title, price_usd, url, latitude, longitude, first_seen_at, last_seen_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-        """, (
-            source_id,
-            source,
-            info['display'],
-            f"{bedrooms} in {neighborhood}",
-            price,
-            f"https://example.com/{source_id}",
-            info['lat'] + random.uniform(-0.05, 0.05),
-            info['lng'] + random.uniform(-0.05, 0.05)
-        ))
-        count += 1
-
-    conn.commit()
-    conn.close()
-    return count
 
 
 # Initialize database on startup

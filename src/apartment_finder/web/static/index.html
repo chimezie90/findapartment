@@ -436,9 +436,6 @@
                     <option value="nyc" data-source="craigslist">NYC</option>
                     <option value="la" data-source="craigslist">Los Angeles</option>
                     <option value="dubai" data-source="findproperties">Dubai</option>
-                    <option value="lisbon" data-source="idealista">Lisbon</option>
-                    <option value="copenhagen" data-source="boligportal">Copenhagen</option>
-                    <option value="bali" data-source="rumah123">Bali</option>
                 </select>
                 <span id="sourceLabel" style="color:#666;font-size:0.9rem;">via Craigslist</span>
                 <button class="fetch-btn" id="fetchBtn" onclick="fetchNewListings()">Fetch New Listings</button>
@@ -546,14 +543,11 @@
             }
         }
 
-        // City to source mapping
+        // City to source mapping (only cities with working scrapers)
         const citySources = {
             'nyc': 'craigslist',
             'la': 'craigslist',
-            'dubai': 'findproperties',
-            'lisbon': 'idealista',
-            'copenhagen': 'boligportal',
-            'bali': 'rumah123'
+            'dubai': 'findproperties'
         };
 
         function updateSourceOptions() {

@@ -78,13 +78,10 @@ cities:
     display_name: "Copenhagen"
     currency: DKK
     sources:
-      - boligportal
-    boligportal:
-      city: copenhagen
+      - lejebolig
+    lejebolig:
+      city: koebenhavn
       # Areas: city center, Frederiksberg, Østerbro, Nørrebro, Vesterbro
-      areas:
-        - copenhagen
-        - frederiksberg
 
   bali:
     display_name: "Bali"

@@ -51,6 +51,16 @@ name = "fetch-dubai-evening"
 cron = "10 20 * * *"
 command = "python -m apartment_finder.main --city dubai --source findproperties"
 
+[[scheduled]]
+name = "fetch-copenhagen-morning"
+cron = "15 8 * * *"
+command = "python -m apartment_finder.main --city copenhagen --source lejebolig"
+
+[[scheduled]]
+name = "fetch-copenhagen-evening"
+cron = "15 20 * * *"
+command = "python -m apartment_finder.main --city copenhagen --source lejebolig"
+
 [workflows]
 runButton = "Project"
 
@@ -72,5 +82,5 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/workspace && python3.11 -m apartment_finder.web.app"
+args = "cd /home/runner/workspace && python3 -m apartment_finder.web.app"
 waitForPort = 5000

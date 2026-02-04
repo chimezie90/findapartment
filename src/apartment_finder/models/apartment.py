@@ -89,6 +89,7 @@ class Apartment:
     amenities: Amenities = field(default_factory=Amenities)
     description: Optional[str] = None
     images: List[str] = field(default_factory=list)
+    thumbnail_url: Optional[str] = None  # Preview image from search results
 
     # Timestamps
     posted_date: Optional[datetime] = None

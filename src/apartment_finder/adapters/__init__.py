@@ -36,6 +36,7 @@ from . import idealista  # noqa: E402, F401
 from . import streeteasy  # noqa: E402, F401
 from . import renthop  # noqa: E402, F401
 from . import findproperties  # noqa: E402, F401
+from . import boligportal  # noqa: E402, F401
 
 __all__ = [
     "BaseAdapter",

@@ -151,7 +151,7 @@
             padding: 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             display: grid;
-            grid-template-columns: 1fr auto;
+            grid-template-columns: auto 1fr auto;
             gap: 15px;
             transition: transform 0.2s, box-shadow 0.2s;
         }
@@ -159,6 +159,29 @@
         .listing:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .listing-thumbnail {
+            width: 120px;
+            height: 90px;
+            border-radius: 6px;
+            overflow: hidden;
+            flex-shrink: 0;
+            background: #e9ecef;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .listing-thumbnail img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .listing-thumbnail .placeholder {
+            color: #adb5bd;
+            font-size: 2rem;
         }
 
         .listing-main {
@@ -220,11 +243,14 @@
         .tag-nyc { background: #e8f4f8; color: #2980b9; }
         .tag-dubai { background: #fef3e2; color: #e67e22; }
         .tag-lisbon { background: #eafaf1; color: #27ae60; }
+        .tag-la { background: #fff0f5; color: #d63384; }
+        .tag-copenhagen { background: #e8f5e9; color: #388e3c; }
 
         .tag-craigslist { background: #f3e5f5; color: #8e24aa; }
         .tag-streeteasy { background: #e3f2fd; color: #1565c0; }
         .tag-renthop { background: #fff3e0; color: #ef6c00; }
         .tag-findproperties { background: #e8f5e9; color: #2e7d32; }
+        .tag-boligportal { background: #e3f2fd; color: #c62828; }
 
         .empty-state {
             text-align: center;
@@ -298,11 +324,17 @@
 
         @media (max-width: 768px) {
             .listing {
-                grid-template-columns: 1fr;
+                grid-template-columns: 80px 1fr;
+            }
+
+            .listing-thumbnail {
+                width: 80px;
+                height: 60px;
             }
 
             .listing-price {
                 text-align: left;
+                grid-column: 1 / -1;
             }
 
             .controls {
@@ -402,10 +434,13 @@
                     <option value="nyc">NYC</option>
                     <option value="la">Los Angeles</option>
                     <option value="dubai">Dubai</option>
+                    <option value="lisbon">Lisbon</option>
+                    <option value="copenhagen">Copenhagen</option>
                 </select>
                 <select id="fetchSource">
                     <option value="craigslist">Craigslist</option>
                     <option value="findproperties">FindProperties</option>
+                    <option value="boligportal">Boligportal</option>
                 </select>
                 <button class="fetch-btn" id="fetchBtn" onclick="fetchNewListings()">Fetch Listings</button>
             </div>
@@ -472,8 +507,10 @@
         const cityCenters = {
             'New York City': { lat: 40.7128, lng: -74.0060 },
             'NYC': { lat: 40.7128, lng: -74.0060 },
+            'Los Angeles': { lat: 34.0522, lng: -118.2437 },
             'Dubai': { lat: 25.2048, lng: 55.2708 },
-            'Lisbon': { lat: 38.7223, lng: -9.1393 }
+            'Lisbon': { lat: 38.7223, lng: -9.1393 },
+            'Copenhagen': { lat: 55.6761, lng: 12.5683 }
         };
 
         async function fetchListings() {
@@ -620,6 +657,8 @@
             if (city?.includes('New York') || city?.includes('NYC')) return 'tag-nyc';
             if (city?.includes('Dubai')) return 'tag-dubai';
             if (city?.includes('Lisbon')) return 'tag-lisbon';
+            if (city?.includes('Los Angeles') || city?.includes('LA')) return 'tag-la';
+            if (city?.includes('Copenhagen')) return 'tag-copenhagen';
             return '';
         }
 
@@ -675,6 +714,12 @@
 
             container.innerHTML = filtered.map(listing => `
                 <div class="listing" onclick="window.location='/listing?id=${encodeURIComponent(listing.source_id)}'" style="cursor:pointer">
+                    <div class="listing-thumbnail">
+                        ${listing.thumbnail_url
+                            ? `<img src="${escapeHtml(listing.thumbnail_url)}" alt="Listing photo" onerror="this.parentElement.innerHTML='<span class=\\'placeholder\\'>🏠</span>'">`
+                            : '<span class="placeholder">🏠</span>'
+                        }
+                    </div>
                     <div class="listing-main">
                         <div class="listing-title">
                             ${escapeHtml(listing.title || 'Untitled')}

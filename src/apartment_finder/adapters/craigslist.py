@@ -167,6 +167,20 @@ class CraigslistAdapter(BaseAdapter):
             id_match = re.search(r"/(\d+)\.html", url)
             listing_id = id_match.group(1) if id_match else url
 
+            # Extract thumbnail image URL
+            thumbnail_url = None
+            img_elem = listing.select_one("img, div.gallery img, .swipe img")
+            if img_elem:
+                thumbnail_url = img_elem.get("src") or img_elem.get("data-src")
+            # Also check for background image in gallery
+            if not thumbnail_url:
+                gallery = listing.select_one(".gallery, .swipe, [data-imgcount]")
+                if gallery:
+                    style = gallery.get("style", "")
+                    bg_match = re.search(r'url\(["\']?([^"\')\s]+)', style)
+                    if bg_match:
+                        thumbnail_url = bg_match.group(1)
+
             return Apartment(
                 source_id=f"craigslist_{listing_id}",
                 source_name="craigslist",
@@ -187,6 +201,7 @@ class CraigslistAdapter(BaseAdapter):
                 amenities=Amenities(),
                 description=None,
                 images=[],
+                thumbnail_url=thumbnail_url,
                 posted_date=None,
                 fetched_at=datetime.utcnow(),
             )

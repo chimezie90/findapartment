@@ -74,6 +74,18 @@ cities:
       center: "38.7223,-9.1393"
       distance: 10000  # meters from center
 
+  copenhagen:
+    display_name: "Copenhagen"
+    currency: DKK
+    sources:
+      - boligportal
+    boligportal:
+      city: copenhagen
+      # Areas: city center, Frederiksberg, Østerbro, Nørrebro, Vesterbro
+      areas:
+        - copenhagen
+        - frederiksberg
+
 # Email delivery settings
 email:
   enabled: true

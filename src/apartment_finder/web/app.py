@@ -57,9 +57,16 @@ def init_db():
             sent_in_email BOOLEAN DEFAULT FALSE,
             sent_at TIMESTAMP,
             latitude REAL,
-            longitude REAL
+            longitude REAL,
+            thumbnail_url TEXT
         )
     """)
+
+    # Add thumbnail_url column if it doesn't exist (for existing databases)
+    try:
+        conn.execute("ALTER TABLE seen_listings ADD COLUMN thumbnail_url TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.execute("CREATE INDEX IF NOT EXISTS idx_city_source ON seen_listings(city, source_name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_last_seen ON seen_listings(last_seen_at)")
 
@@ -154,7 +161,8 @@ def get_listings():
                 last_seen_at,
                 sent_in_email,
                 latitude,
-                longitude
+                longitude,
+                thumbnail_url
             FROM seen_listings
             ORDER BY first_seen_at DESC
         """)
@@ -265,6 +273,75 @@ def api_post_comment(source_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/listing/<path:source_id>/images')
+def api_listing_images(source_id):
+    """Scrape images from the original listing URL."""
+    import re
+    import requests
+    from bs4 import BeautifulSoup
+
+    listing = get_listing(source_id)
+    if not listing:
+        return jsonify({'error': 'Listing not found', 'images': []}), 404
+
+    url = listing.get('url')
+    if not url or url == '#':
+        return jsonify({'images': [], 'error': 'No valid URL for this listing'})
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        images = []
+
+        # Craigslist: look for gallery images
+        for img in soup.select('.gallery img, .swipe img, #thumbs a, .slide img'):
+            src = img.get('src') or img.get('data-src') or img.get('href')
+            if src and src not in images:
+                # Convert thumbnail URL to full-size URL
+                if '50x50c' in src:
+                    src = src.replace('50x50c', '600x450')
+                elif '300x300' in src:
+                    src = src.replace('300x300', '600x450')
+                images.append(src)
+
+        # Also check for image links in anchors
+        for a in soup.select('a[href*="images.craigslist.org"]'):
+            href = a.get('href')
+            if href and href not in images:
+                images.append(href)
+
+        # Look for images in script tags (common pattern)
+        for script in soup.select('script'):
+            text = script.get_text()
+            img_urls = re.findall(r'https://images\.craigslist\.org/[^\s"\'<>]+\.jpg', text)
+            for img_url in img_urls:
+                if img_url not in images:
+                    images.append(img_url)
+
+        # Generic fallback: any large images on the page
+        if not images:
+            for img in soup.select('img[src*="http"]'):
+                src = img.get('src')
+                if src and ('jpg' in src or 'jpeg' in src or 'png' in src):
+                    if src not in images:
+                        images.append(src)
+
+        return jsonify({'images': images[:20]})  # Limit to 20 images
+
+    except requests.RequestException as e:
+        print(f"Error fetching images from {url}: {e}")
+        return jsonify({'images': [], 'error': str(e)})
+    except Exception as e:
+        print(f"Error parsing images: {e}")
+        return jsonify({'images': [], 'error': str(e)})
+
+
 @app.route('/api/stats')
 def api_stats():
     """Return listing statistics."""
@@ -299,7 +376,7 @@ def api_fetch():
     source = data.get('source', 'craigslist')
 
     # Only allow sources that work without a headed browser
-    allowed_sources = ['craigslist', 'findproperties']
+    allowed_sources = ['craigslist', 'findproperties', 'boligportal']
     if source not in allowed_sources:
         return jsonify({
             'success': False,

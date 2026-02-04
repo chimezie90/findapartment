@@ -432,19 +432,15 @@
         <div class="demo-banner visible" id="demoBanner">
             <p>Fetch New Listings</p>
             <div class="fetch-controls">
-                <select id="fetchCity">
-                    <option value="nyc">NYC</option>
-                    <option value="la">Los Angeles</option>
-                    <option value="dubai">Dubai</option>
-                    <option value="lisbon">Lisbon</option>
-                    <option value="copenhagen">Copenhagen</option>
-                    <option value="bali">Bali</option>
+                <select id="fetchCity" onchange="updateSourceOptions()">
+                    <option value="nyc" data-source="craigslist">NYC</option>
+                    <option value="la" data-source="craigslist">Los Angeles</option>
+                    <option value="dubai" data-source="findproperties">Dubai</option>
+                    <option value="lisbon" data-source="idealista">Lisbon</option>
+                    <option value="copenhagen" data-source="boligportal">Copenhagen</option>
+                    <option value="bali" data-source="rumah123">Bali</option>
                 </select>
-                <select id="fetchSource">
-                    <option value="craigslist">Craigslist</option>
-                    <option value="findproperties">FindProperties</option>
-                    <option value="boligportal">Boligportal</option>
-                </select>
+                <span id="sourceLabel" style="color:#666;font-size:0.9rem;">via Craigslist</span>
                 <button class="fetch-btn" id="fetchBtn" onclick="fetchNewListings()">Fetch New Listings</button>
             </div>
         </div>
@@ -550,10 +546,27 @@
             }
         }
 
+        // City to source mapping
+        const citySources = {
+            'nyc': 'craigslist',
+            'la': 'craigslist',
+            'dubai': 'findproperties',
+            'lisbon': 'idealista',
+            'copenhagen': 'boligportal',
+            'bali': 'rumah123'
+        };
+
+        function updateSourceOptions() {
+            const citySelect = document.getElementById('fetchCity');
+            const sourceLabel = document.getElementById('sourceLabel');
+            const source = citySources[citySelect.value] || 'craigslist';
+            sourceLabel.textContent = `via ${source.charAt(0).toUpperCase() + source.slice(1)}`;
+        }
+
         async function fetchNewListings() {
             const btn = document.getElementById('fetchBtn');
             const city = document.getElementById('fetchCity').value;
-            const source = document.getElementById('fetchSource').value;
+            const source = citySources[city] || 'craigslist';
 
             btn.disabled = true;
             btn.textContent = 'Fetching...';
@@ -571,17 +584,18 @@
                     btn.textContent = 'Success! Refreshing...';
                     setTimeout(() => {
                         fetchListings();
-                        btn.textContent = 'Fetch Listings';
+                        btn.textContent = 'Fetch New Listings';
                         btn.disabled = false;
                     }, 1000);
                 } else {
-                    alert('Error: ' + (result.error || 'Unknown error'));
-                    btn.textContent = 'Fetch Listings';
+                    const errorMsg = result.error || result.stderr || 'Unknown error';
+                    alert('Error: ' + errorMsg);
+                    btn.textContent = 'Fetch New Listings';
                     btn.disabled = false;
                 }
             } catch (error) {
                 alert('Error: ' + error.message);
-                btn.textContent = 'Fetch Listings';
+                btn.textContent = 'Fetch New Listings';
                 btn.disabled = false;
             }
         }

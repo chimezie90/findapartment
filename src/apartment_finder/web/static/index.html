@@ -245,6 +245,7 @@
         .tag-lisbon { background: #eafaf1; color: #27ae60; }
         .tag-la { background: #fff0f5; color: #d63384; }
         .tag-copenhagen { background: #e8f5e9; color: #388e3c; }
+        .tag-bali { background: #fff8e1; color: #ff6f00; }
 
         .tag-craigslist { background: #f3e5f5; color: #8e24aa; }
         .tag-streeteasy { background: #e3f2fd; color: #1565c0; }
@@ -510,7 +511,8 @@
             'Los Angeles': { lat: 34.0522, lng: -118.2437 },
             'Dubai': { lat: 25.2048, lng: 55.2708 },
             'Lisbon': { lat: 38.7223, lng: -9.1393 },
-            'Copenhagen': { lat: 55.6761, lng: 12.5683 }
+            'Copenhagen': { lat: 55.6761, lng: 12.5683 },
+            'Bali': { lat: -8.4095, lng: 115.1889 }
         };
 
         async function fetchListings() {
@@ -659,6 +661,7 @@
             if (city?.includes('Lisbon')) return 'tag-lisbon';
             if (city?.includes('Los Angeles') || city?.includes('LA')) return 'tag-la';
             if (city?.includes('Copenhagen')) return 'tag-copenhagen';
+            if (city?.includes('Bali')) return 'tag-bali';
             return '';
         }
 

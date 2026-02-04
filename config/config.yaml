@@ -86,6 +86,19 @@ cities:
         - copenhagen
         - frederiksberg
 
+  bali:
+    display_name: "Bali"
+    currency: IDR
+    sources:
+      - rumah123
+    rumah123:
+      region: bali
+      # Areas: Canggu, Seminyak, Ubud, Uluwatu, Sanur, Kuta
+      areas:
+        - canggu
+        - seminyak
+        - ubud
+
 # Email delivery settings
 email:
   enabled: true

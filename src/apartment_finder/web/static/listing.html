@@ -660,7 +660,8 @@
             'Los Angeles': { lat: 34.0522, lng: -118.2437 },
             'Dubai': { lat: 25.2048, lng: 55.2708 },
             'Lisbon': { lat: 38.7223, lng: -9.1393 },
-            'Copenhagen': { lat: 55.6761, lng: 12.5683 }
+            'Copenhagen': { lat: 55.6761, lng: 12.5683 },
+            'Bali': { lat: -8.4095, lng: 115.1889 }
         };
 
         async function loadListing() {
@@ -810,6 +811,19 @@
                 cost: { rating: 'low', note: 'High taxes and living costs' },
                 quality_of_life: { rating: 'high', note: 'Excellent work-life balance, safe' },
                 summary: 'Home base for A with great quality of life. Cold weather is the main downside.'
+            },
+            'Bali': {
+                immigration: { rating: 'high', note: 'Easy tourist/digital nomad visas, affordable extensions' },
+                work: { rating: 'medium', note: 'Great for remote work, strong digital nomad community' },
+                weather: { rating: 'high', note: 'Tropical year-round, warm with rainy season' },
+                family_access: { rating: 'low', note: 'Very far from Seattle, Atlanta, and Copenhagen' },
+                calmness: { rating: 'high', note: 'Peaceful beaches, rice terraces, spiritual culture' },
+                culture: { rating: 'high', note: 'Rich Balinese culture, temples, ceremonies' },
+                healthy_food: { rating: 'high', note: 'Amazing healthy cafes, fresh tropical fruits' },
+                fitness: { rating: 'medium', note: 'Yoga everywhere, surfing, some gyms, no skating' },
+                cost: { rating: 'high', note: 'Very affordable, great value for money' },
+                quality_of_life: { rating: 'high', note: 'Relaxed lifestyle, beautiful nature, friendly locals' },
+                summary: 'Best value with tropical paradise lifestyle. Perfect for remote work and wellness, but far from family.'
             }
         };
 
@@ -961,6 +975,10 @@
                 walkScore = 75 + Math.floor(Math.random() * 15);
                 transitScore = 70 + Math.floor(Math.random() * 20);
                 bikeScore = 50 + Math.floor(Math.random() * 20);
+            } else if (listing.city?.includes('Bali')) {
+                walkScore = 30 + Math.floor(Math.random() * 20);  // Scooter-dependent
+                transitScore = 20 + Math.floor(Math.random() * 20);
+                bikeScore = 40 + Math.floor(Math.random() * 20);
             } else {
                 walkScore = 60 + Math.floor(Math.random() * 30);
                 transitScore = 55 + Math.floor(Math.random() * 30);

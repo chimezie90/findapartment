@@ -10,8 +10,8 @@ channel = "stable-25_05"
 packages = ["libyaml"]
 
 [deployment]
-run = ["python", "-m", "apartment_finder.daily_fetch"]
-deploymentTarget = "scheduled"
+run = ["python", "-m", "apartment_finder.web.app"]
+deploymentTarget = "autoscale"
 
 [[ports]]
 localPort = 5000

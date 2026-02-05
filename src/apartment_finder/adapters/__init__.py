@@ -46,6 +46,8 @@ for _name in [
     "boligportal",
     "lejebolig",
     "propertyfinder",
+    "casasapo",
+    "rumah123",
 ]:
     try:
         _importlib.import_module(f".{_name}", __name__)

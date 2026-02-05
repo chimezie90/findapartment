@@ -1,29 +1,43 @@
 """Tests for deduplication service."""
 
 import os
-import tempfile
 import pytest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from apartment_finder.models.apartment import Amenities, Apartment
 from apartment_finder.services.deduplication import DeduplicationService
+from apartment_finder.db import get_connection, init_db
+
+
+@pytest.fixture(autouse=True)
+def require_database_url():
+    """Skip tests if DATABASE_URL is not set."""
+    if not os.environ.get("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not set — cannot run PostgreSQL tests")
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary database file."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    yield db_path
-    # Cleanup
-    if os.path.exists(db_path):
-        os.unlink(db_path)
+def clean_db():
+    """Ensure a clean database state for each test."""
+    init_db()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ratings")
+        cur.execute("DELETE FROM comments")
+        cur.execute("DELETE FROM seen_listings")
+    yield
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ratings")
+        cur.execute("DELETE FROM comments")
+        cur.execute("DELETE FROM seen_listings")
 
 
 @pytest.fixture
-def dedup_service(temp_db):
-    """Create a deduplication service with temp database."""
-    return DeduplicationService(db_path=temp_db)
+def dedup_service(clean_db):
+    """Create a deduplication service."""
+    return DeduplicationService()
 
 
 @pytest.fixture
@@ -100,21 +114,18 @@ class TestDeduplicationService:
         # Should not raise
         dedup_service.mark_as_sent([])
 
-    def test_cleanup_old_listings(self, dedup_service, make_apartment, temp_db):
+    def test_cleanup_old_listings(self, dedup_service, make_apartment):
         apt = make_apartment("old_apt")
         dedup_service.filter_new_listings([apt])
 
         # Manually backdate the listing in the database
-        import sqlite3
-        from datetime import datetime, timedelta
         old_date = datetime.utcnow() - timedelta(days=31)
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "UPDATE seen_listings SET last_seen_at = ? WHERE source_id = ?",
-            (old_date, "old_apt")
-        )
-        conn.commit()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
+                (old_date, "old_apt"),
+            )
 
         # Cleanup with 30 days should remove the old listing
         removed = dedup_service.cleanup_old_listings(days=30)
@@ -159,15 +170,15 @@ class TestDeduplicationService:
 
         assert dedup_service.get_stats()["total_tracked"] == 0
 
-    def test_database_persists(self, temp_db, make_apartment):
+    def test_database_persists(self, clean_db, make_apartment):
         # Create service and add listing
-        service1 = DeduplicationService(db_path=temp_db)
+        service1 = DeduplicationService()
         apt = make_apartment("persistent")
         service1.filter_new_listings([apt])
         service1.mark_as_sent([apt])
 
-        # Create new service instance with same DB
-        service2 = DeduplicationService(db_path=temp_db)
+        # Create new service instance (same DB via DATABASE_URL)
+        service2 = DeduplicationService()
 
         # Should still be marked as sent
         result = service2.filter_new_listings([apt])

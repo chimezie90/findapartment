@@ -3,109 +3,18 @@
 import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, jsonify, send_from_directory, request
 
+from ..db import get_connection, init_db
+
 app = Flask(__name__, static_folder='static')
-
-# Database path - use data directory relative to project root
-def get_db_path():
-    """Get the database path, trying multiple locations."""
-    possible_paths = [
-        Path(__file__).parent.parent.parent.parent / "data" / "listings.db",
-        Path.cwd() / "data" / "listings.db",
-    ]
-    for path in possible_paths:
-        if path.exists():
-            return path
-    # Return first path as default (will be created if needed)
-    return possible_paths[0]
-
 
 # Empty fallback when no database exists
 SAMPLE_LISTINGS = []
-
-
-def init_db():
-    """Initialize the database if it doesn't exist."""
-    db_path = get_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(str(db_path))
-
-    # Listings table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS seen_listings (
-            source_id TEXT PRIMARY KEY,
-            source_name TEXT NOT NULL,
-            city TEXT NOT NULL,
-            title TEXT,
-            price_usd REAL,
-            url TEXT,
-            first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            sent_in_email BOOLEAN DEFAULT FALSE,
-            sent_at TIMESTAMP,
-            latitude REAL,
-            longitude REAL,
-            thumbnail_url TEXT
-        )
-    """)
-
-    # Add thumbnail_url column if it doesn't exist (for existing databases)
-    try:
-        conn.execute("ALTER TABLE seen_listings ADD COLUMN thumbnail_url TEXT")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
-    # Add description column if it doesn't exist (for existing databases)
-    try:
-        conn.execute("ALTER TABLE seen_listings ADD COLUMN description TEXT")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_city_source ON seen_listings(city, source_name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_last_seen ON seen_listings(last_seen_at)")
-
-    # Comments table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS comments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            listing_id TEXT NOT NULL,
-            author TEXT,
-            text TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (listing_id) REFERENCES seen_listings(source_id)
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_listing ON comments(listing_id)")
-
-    # Ratings table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS ratings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            listing_id TEXT NOT NULL,
-            author TEXT NOT NULL,
-            rating TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(listing_id, author),
-            FOREIGN KEY (listing_id) REFERENCES seen_listings(source_id)
-        )
-    """)
-
-    conn.commit()
-
-    # Load seed data if database is empty
-    cursor = conn.execute("SELECT COUNT(*) FROM seen_listings")
-    count = cursor.fetchone()[0]
-    if count == 0:
-        load_seed_data(conn)
-
-    conn.close()
-    return db_path
 
 
 def load_seed_data(conn):
@@ -121,12 +30,14 @@ def load_seed_data(conn):
                 with open(seed_path, 'r') as f:
                     listings = json.load(f)
 
+                cur = conn.cursor()
                 for listing in listings:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO seen_listings
+                    cur.execute("""
+                        INSERT INTO seen_listings
                         (source_id, source_name, city, title, price_usd, url,
                          first_seen_at, last_seen_at, sent_in_email)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (source_id) DO NOTHING
                     """, (
                         listing.get('source_id'),
                         listing.get('source_name'),
@@ -136,7 +47,7 @@ def load_seed_data(conn):
                         listing.get('url'),
                         listing.get('first_seen_at'),
                         listing.get('last_seen_at'),
-                        listing.get('sent_in_email', 0)
+                        listing.get('sent_in_email', False)
                     ))
 
                 conn.commit()
@@ -146,41 +57,41 @@ def load_seed_data(conn):
                 print(f"Error loading seed data: {e}")
 
 
-def get_db():
-    """Get a database connection."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn
+def _init_app_db():
+    """Initialize DB schema and seed data if empty."""
+    init_db()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS cnt FROM seen_listings")
+        count = cur.fetchone()['cnt']
+        if count == 0:
+            load_seed_data(conn)
 
 
 def get_listings():
     """Fetch all listings from the database."""
-    db_path = get_db_path()
-    if not db_path.exists():
-        return SAMPLE_LISTINGS
-
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT
-                source_id,
-                source_name,
-                city,
-                title,
-                price_usd,
-                url,
-                first_seen_at,
-                last_seen_at,
-                sent_in_email,
-                latitude,
-                longitude,
-                thumbnail_url
-            FROM seen_listings
-            ORDER BY first_seen_at DESC
-        """)
-        rows = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT
+                    source_id,
+                    source_name,
+                    city,
+                    title,
+                    price_usd,
+                    url,
+                    first_seen_at,
+                    last_seen_at,
+                    sent_in_email,
+                    latitude,
+                    longitude,
+                    thumbnail_url
+                FROM seen_listings
+                ORDER BY first_seen_at DESC
+            """)
+            rows = cur.fetchall()
 
         if not rows:
             return SAMPLE_LISTINGS
@@ -197,17 +108,13 @@ def get_listing(source_id):
         if listing['source_id'] == source_id:
             return listing
 
-    db_path = get_db_path()
-    if not db_path.exists():
-        return None
-
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT * FROM seen_listings WHERE source_id = ?
-        """, (source_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT * FROM seen_listings WHERE source_id = %s
+            """, (source_id,))
+            row = cur.fetchone()
         return dict(row) if row else None
     except Exception as e:
         print(f"Database error: {e}")
@@ -247,15 +154,15 @@ def api_listing(source_id):
 def api_get_comments(source_id):
     """Get comments for a listing."""
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT id, author, text, created_at
-            FROM comments
-            WHERE listing_id = ?
-            ORDER BY created_at DESC
-        """, (source_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, author, text, created_at
+                FROM comments
+                WHERE listing_id = %s
+                ORDER BY created_at DESC
+            """, (source_id,))
+            rows = cur.fetchall()
         return jsonify([dict(row) for row in rows])
     except Exception as e:
         print(f"Error getting comments: {e}")
@@ -273,13 +180,12 @@ def api_post_comment(source_id):
         return jsonify({'error': 'Comment text is required'}), 400
 
     try:
-        conn = get_db()
-        conn.execute("""
-            INSERT INTO comments (listing_id, author, text, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (source_id, author, text, datetime.utcnow()))
-        conn.commit()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO comments (listing_id, author, text, created_at)
+                VALUES (%s, %s, %s, %s)
+            """, (source_id, author, text, datetime.utcnow()))
         return jsonify({'success': True})
     except Exception as e:
         print(f"Error posting comment: {e}")
@@ -290,14 +196,14 @@ def api_post_comment(source_id):
 def api_get_ratings(source_id):
     """Get ratings for a listing."""
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT author, rating, created_at
-            FROM ratings
-            WHERE listing_id = ?
-        """, (source_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT author, rating, created_at
+                FROM ratings
+                WHERE listing_id = %s
+            """, (source_id,))
+            rows = cur.fetchall()
         return jsonify([dict(row) for row in rows])
     except Exception as e:
         print(f"Error getting ratings: {e}")
@@ -318,14 +224,13 @@ def api_post_rating(source_id):
         return jsonify({'error': 'Rating must be happy, neutral, or sad'}), 400
 
     try:
-        conn = get_db()
-        conn.execute("""
-            INSERT INTO ratings (listing_id, author, rating, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(listing_id, author) DO UPDATE SET rating = excluded.rating, created_at = excluded.created_at
-        """, (source_id, author, rating, datetime.utcnow()))
-        conn.commit()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO ratings (listing_id, author, rating, created_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT(listing_id, author) DO UPDATE SET rating = EXCLUDED.rating, created_at = EXCLUDED.created_at
+            """, (source_id, author, rating, datetime.utcnow()))
         return jsonify({'success': True})
     except Exception as e:
         print(f"Error posting rating: {e}")
@@ -336,16 +241,16 @@ def api_post_rating(source_id):
 def api_all_ratings():
     """Return all rated listings with their ratings."""
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT r.listing_id, r.author, r.rating,
-                   l.title, l.price_usd, l.city, l.source_name, l.thumbnail_url
-            FROM ratings r
-            JOIN seen_listings l ON r.listing_id = l.source_id
-            ORDER BY r.created_at DESC
-        """)
-        rows = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT r.listing_id, r.author, r.rating,
+                       l.title, l.price_usd, l.city, l.source_name, l.thumbnail_url
+                FROM ratings r
+                JOIN seen_listings l ON r.listing_id = l.source_id
+                ORDER BY r.created_at DESC
+            """)
+            rows = cur.fetchall()
 
         # Group by listing
         listings = {}
@@ -558,15 +463,15 @@ def _match_city(city_name):
 def _get_preferences():
     """Analyze existing ratings to build a preference profile."""
     try:
-        conn = get_db()
-        cursor = conn.execute("""
-            SELECT r.listing_id, r.author, r.rating,
-                   l.title, l.price_usd, l.city, l.description
-            FROM ratings r
-            JOIN seen_listings l ON r.listing_id = l.source_id
-        """)
-        rows = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT r.listing_id, r.author, r.rating,
+                       l.title, l.price_usd, l.city, l.description
+                FROM ratings r
+                JOIN seen_listings l ON r.listing_id = l.source_id
+            """)
+            rows = [dict(row) for row in cur.fetchall()]
     except Exception:
         rows = []
 
@@ -852,13 +757,12 @@ def api_listing_description(source_id):
         description = scrape_description(listing)
         if description:
             try:
-                conn = get_db()
-                conn.execute(
-                    "UPDATE seen_listings SET description = ? WHERE source_id = ?",
-                    (description, source_id),
-                )
-                conn.commit()
-                conn.close()
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE seen_listings SET description = %s WHERE source_id = %s",
+                        (description, source_id),
+                    )
             except Exception as e:
                 print(f"Error saving description: {e}")
 
@@ -954,7 +858,7 @@ def api_fetch():
     source = working_scrapers[city]
 
     try:
-        init_db()
+        _init_app_db()
 
         # Get project root
         project_root = Path(__file__).parent.parent.parent.parent
@@ -994,12 +898,11 @@ def api_fetch():
 
 # Initialize database on startup
 with app.app_context():
-    init_db()
+    _init_app_db()
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    db_path = init_db()
-    print(f"Database: {db_path}")
+    _init_app_db()
     print(f"Starting server at http://0.0.0.0:{port}")
     app.run(host='0.0.0.0', port=port, debug=True)

@@ -253,6 +253,75 @@
         .tag-findproperties { background: #e8f5e9; color: #2e7d32; }
         .tag-boligportal { background: #e3f2fd; color: #c62828; }
 
+        /* Our Picks */
+        .our-picks {
+            display: none;
+            margin-bottom: 20px;
+        }
+
+        .our-picks.visible {
+            display: block;
+        }
+
+        .our-picks h2 {
+            font-size: 1.2rem;
+            color: #2c3e50;
+            margin-bottom: 12px;
+        }
+
+        .picks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+        }
+
+        .pick-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border-left: 4px solid #3498db;
+        }
+
+        .pick-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .pick-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 6px;
+            font-size: 0.95rem;
+        }
+
+        .pick-meta {
+            display: flex;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .pick-ratings {
+            display: flex;
+            gap: 12px;
+            font-size: 0.9rem;
+        }
+
+        .pick-rating-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .pick-rating-item .name {
+            font-weight: 500;
+            color: #555;
+        }
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -435,7 +504,7 @@
                 <select id="fetchCity" onchange="updateSourceOptions()">
                     <option value="nyc" data-source="craigslist">NYC</option>
                     <option value="la" data-source="craigslist">Los Angeles</option>
-                    <option value="dubai" data-source="findproperties">Dubai</option>
+                    <option value="dubai" data-source="propertyfinder">Dubai</option>
                     <option value="copenhagen" data-source="lejebolig">Copenhagen</option>
                 </select>
                 <span id="sourceLabel" style="color:#666;font-size:0.9rem;">via Craigslist</span>
@@ -480,6 +549,11 @@
             </div>
         </div>
 
+        <div class="our-picks" id="ourPicks">
+            <h2>Our Picks</h2>
+            <div class="picks-grid" id="picksGrid"></div>
+        </div>
+
         <div id="listingsContainer" class="listings">
             <div class="empty-state">
                 <h2>Loading listings...</h2>
@@ -511,6 +585,8 @@
             'Bali': { lat: -8.4095, lng: 115.1889 }
         };
 
+        const ratingEmoji = { happy: '😊', neutral: '😐', sad: '😢' };
+
         async function fetchListings() {
             try {
                 const response = await fetch('/api/listings');
@@ -519,6 +595,7 @@
                 renderListings();
                 updateStats();
                 checkDemoMode();
+                loadRatedListings();
                 if (currentView === 'map') {
                     renderMap();
                 }
@@ -530,6 +607,42 @@
                         <p>${error.message}</p>
                     </div>
                 `;
+            }
+        }
+
+        async function loadRatedListings() {
+            try {
+                const response = await fetch('/api/ratings');
+                const rated = await response.json();
+                const container = document.getElementById('ourPicks');
+                const grid = document.getElementById('picksGrid');
+
+                if (rated.length === 0) {
+                    container.classList.remove('visible');
+                    return;
+                }
+
+                container.classList.add('visible');
+                grid.innerHTML = rated.map(item => {
+                    const price = item.price_usd
+                        ? '$' + item.price_usd.toLocaleString('en-US', { maximumFractionDigits: 0 }) + '/mo'
+                        : 'Price N/A';
+                    const ratings = Object.entries(item.ratings || {}).map(([author, rating]) =>
+                        `<span class="pick-rating-item"><span class="name">${escapeHtml(author)}:</span> ${ratingEmoji[rating] || '?'}</span>`
+                    ).join('');
+                    return `
+                        <div class="pick-card" onclick="window.location='/listing?id=${encodeURIComponent(item.source_id)}'">
+                            <div class="pick-title">${escapeHtml(item.title || 'Untitled')}</div>
+                            <div class="pick-meta">
+                                <span>${escapeHtml(item.city || '')}</span>
+                                <span>${price}</span>
+                            </div>
+                            <div class="pick-ratings">${ratings}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error loading rated listings:', error);
             }
         }
 

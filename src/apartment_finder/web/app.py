@@ -83,6 +83,19 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_listing ON comments(listing_id)")
 
+    # Ratings table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            listing_id TEXT NOT NULL,
+            author TEXT NOT NULL,
+            rating TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(listing_id, author),
+            FOREIGN KEY (listing_id) REFERENCES seen_listings(source_id)
+        )
+    """)
+
     conn.commit()
 
     # Load seed data if database is empty
@@ -273,6 +286,90 @@ def api_post_comment(source_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/listing/<path:source_id>/ratings', methods=['GET'])
+def api_get_ratings(source_id):
+    """Get ratings for a listing."""
+    try:
+        conn = get_db()
+        cursor = conn.execute("""
+            SELECT author, rating, created_at
+            FROM ratings
+            WHERE listing_id = ?
+        """, (source_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify([dict(row) for row in rows])
+    except Exception as e:
+        print(f"Error getting ratings: {e}")
+        return jsonify([])
+
+
+@app.route('/api/listing/<path:source_id>/ratings', methods=['POST'])
+def api_post_rating(source_id):
+    """Upsert a rating for a listing."""
+    data = request.get_json() or {}
+    author = data.get('author', '').strip()
+    rating = data.get('rating', '').strip()
+
+    if not author or not rating:
+        return jsonify({'error': 'Author and rating are required'}), 400
+
+    if rating not in ('happy', 'neutral', 'sad'):
+        return jsonify({'error': 'Rating must be happy, neutral, or sad'}), 400
+
+    try:
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO ratings (listing_id, author, rating, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(listing_id, author) DO UPDATE SET rating = excluded.rating, created_at = excluded.created_at
+        """, (source_id, author, rating, datetime.utcnow()))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"Error posting rating: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ratings')
+def api_all_ratings():
+    """Return all rated listings with their ratings."""
+    try:
+        conn = get_db()
+        cursor = conn.execute("""
+            SELECT r.listing_id, r.author, r.rating,
+                   l.title, l.price_usd, l.city, l.source_name, l.thumbnail_url
+            FROM ratings r
+            JOIN seen_listings l ON r.listing_id = l.source_id
+            ORDER BY r.created_at DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Group by listing
+        listings = {}
+        for row in rows:
+            row = dict(row)
+            lid = row['listing_id']
+            if lid not in listings:
+                listings[lid] = {
+                    'source_id': lid,
+                    'title': row['title'],
+                    'price_usd': row['price_usd'],
+                    'city': row['city'],
+                    'source_name': row['source_name'],
+                    'thumbnail_url': row['thumbnail_url'],
+                    'ratings': {}
+                }
+            listings[lid]['ratings'][row['author']] = row['rating']
+
+        return jsonify(list(listings.values()))
+    except Exception as e:
+        print(f"Error getting all ratings: {e}")
+        return jsonify([])
+
+
 @app.route('/api/listing/<path:source_id>/images')
 def api_listing_images(source_id):
     """Scrape images from the original listing URL."""
@@ -379,7 +476,7 @@ def api_fetch():
     working_scrapers = {
         'nyc': 'craigslist',
         'la': 'craigslist',
-        'dubai': 'findproperties',
+        'dubai': 'propertyfinder',
         'copenhagen': 'lejebolig',
     }
 

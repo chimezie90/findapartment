@@ -392,6 +392,58 @@
             filter: hue-rotate(100deg);
         }
 
+        /* Score badges on listing cards */
+        .listing-score {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            min-width: 44px;
+        }
+
+        .score-circle-sm {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .score-circle-sm.green { background: #27ae60; }
+        .score-circle-sm.yellow { background: #f39c12; }
+        .score-circle-sm.red { background: #e74c3c; }
+        .score-circle-sm.gray { background: #ddd; color: #999; }
+
+        .score-label-sm {
+            font-size: 0.65rem;
+            color: #888;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .pick-score {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        .pick-score-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .pick-score-dot.green { background: #27ae60; }
+        .pick-score-dot.yellow { background: #f39c12; }
+        .pick-score-dot.red { background: #e74c3c; }
+
         @media (max-width: 768px) {
             .listing {
                 grid-template-columns: 80px 1fr;
@@ -530,6 +582,7 @@
             <div class="control-group">
                 <label>Sort by</label>
                 <select id="sortBy">
+                    <option value="score-desc">Best Match</option>
                     <option value="date-desc">Newest First</option>
                     <option value="date-asc">Oldest First</option>
                     <option value="price-asc">Price: Low to High</option>
@@ -569,6 +622,7 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         let allListings = [];
+        let listingScores = {};
         let map = null;
         let markers = [];
         let currentView = 'list';
@@ -596,6 +650,7 @@
                 updateStats();
                 checkDemoMode();
                 loadRatedListings();
+                loadScores();
                 if (currentView === 'map') {
                     renderMap();
                 }
@@ -630,12 +685,17 @@
                     const ratings = Object.entries(item.ratings || {}).map(([author, rating]) =>
                         `<span class="pick-rating-item"><span class="name">${escapeHtml(author)}:</span> ${ratingEmoji[rating] || '?'}</span>`
                     ).join('');
+                    const sd = listingScores[item.source_id];
+                    const pickScoreHtml = sd
+                        ? `<span class="pick-score"><span class="pick-score-dot ${getScoreColor(sd.score)}"></span>${sd.score}</span>`
+                        : '';
                     return `
                         <div class="pick-card" onclick="window.location='/listing?id=${encodeURIComponent(item.source_id)}'">
                             <div class="pick-title">${escapeHtml(item.title || 'Untitled')}</div>
                             <div class="pick-meta">
                                 <span>${escapeHtml(item.city || '')}</span>
                                 <span>${price}</span>
+                                ${pickScoreHtml}
                             </div>
                             <div class="pick-ratings">${ratings}</div>
                         </div>
@@ -708,6 +768,24 @@
             }
         }
 
+        async function loadScores() {
+            try {
+                const response = await fetch('/api/scores');
+                listingScores = await response.json();
+                // Re-render to show scores
+                renderListings();
+                loadRatedListings();
+            } catch (error) {
+                console.error('Error loading scores:', error);
+            }
+        }
+
+        function getScoreColor(score) {
+            if (score >= 70) return 'green';
+            if (score >= 50) return 'yellow';
+            return 'red';
+        }
+
         function populateFilters() {
             const cities = [...new Set(allListings.map(l => l.city))].sort();
             const sources = [...new Set(allListings.map(l => l.source_name))].sort();
@@ -745,6 +823,8 @@
             // Sort
             filtered.sort((a, b) => {
                 switch (sortBy) {
+                    case 'score-desc':
+                        return ((listingScores[b.source_id]?.score) || 0) - ((listingScores[a.source_id]?.score) || 0);
                     case 'date-desc':
                         return new Date(b.first_seen_at) - new Date(a.first_seen_at);
                     case 'date-asc':
@@ -834,7 +914,15 @@
                 return;
             }
 
-            container.innerHTML = filtered.map(listing => `
+            container.innerHTML = filtered.map(listing => {
+                const sd = listingScores[listing.source_id];
+                const scoreHtml = sd
+                    ? `<div class="listing-score">
+                           <div class="score-circle-sm ${getScoreColor(sd.score)}">${sd.score}</div>
+                           <span class="score-label-sm">${escapeHtml(sd.label)}</span>
+                       </div>`
+                    : `<div class="listing-score"><div class="score-circle-sm gray">--</div></div>`;
+                return `
                 <div class="listing" onclick="window.location='/listing?id=${encodeURIComponent(listing.source_id)}'" style="cursor:pointer">
                     <div class="listing-thumbnail">
                         ${listing.thumbnail_url
@@ -854,9 +942,11 @@
                     </div>
                     <div>
                         <div class="listing-price">${formatPrice(listing.price_usd)}</div>
+                        ${scoreHtml}
                     </div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function initMap() {

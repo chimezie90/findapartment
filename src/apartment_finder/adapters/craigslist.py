@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,12 +26,19 @@ class CraigslistAdapter(BaseAdapter):
     Rate limited to be respectful to the service.
     """
 
+    DETAIL_DELAY = 0.5  # seconds between detail page fetches
+
     def __init__(self, config: Dict[str, Any], city_config: Dict[str, Any]):
         super().__init__(config, city_config)
         self.site = city_config.get("craigslist", {}).get("site", "newyork")
         self.areas = city_config.get("craigslist", {}).get("areas", [])
         self.rate_limit = config.get("rate_limit", 2)
         self.city_name = city_config.get("display_name", "Unknown")
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
 
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
@@ -72,13 +79,7 @@ class CraigslistAdapter(BaseAdapter):
             "minSqft": criteria.min_sqft,
         }
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
-        response = requests.get(search_url, params=params, headers=headers, timeout=30)
+        response = requests.get(search_url, params=params, headers=self._headers, timeout=30)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -104,6 +105,39 @@ class CraigslistAdapter(BaseAdapter):
                 apartments.append(apartment)
 
         return apartments
+
+    def _fetch_coordinates(self, url: str) -> Tuple[Optional[float], Optional[float]]:
+        """Fetch coordinates from a listing's detail page.
+
+        Looks for map data attributes or geo meta tags.
+        Returns (latitude, longitude) or (None, None) on failure.
+        """
+        try:
+            time.sleep(self.DETAIL_DELAY)
+            response = requests.get(url, headers=self._headers, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Primary: <div id="map" data-latitude="..." data-longitude="...">
+            map_div = soup.find("div", id="map")
+            if map_div:
+                lat = map_div.get("data-latitude")
+                lng = map_div.get("data-longitude")
+                if lat and lng:
+                    return float(lat), float(lng)
+
+            # Fallback: <meta name="geo.position" content="lat;lng">
+            geo_meta = soup.find("meta", attrs={"name": "geo.position"})
+            if geo_meta:
+                content = geo_meta.get("content", "")
+                parts = content.split(";")
+                if len(parts) == 2:
+                    return float(parts[0].strip()), float(parts[1].strip())
+
+        except Exception as e:
+            logger.debug(f"Failed to fetch coordinates from {url}: {e}")
+
+        return None, None
 
     def _parse_listing(self, listing, base_url: str) -> Optional[Apartment]:
         """Parse a single listing element."""
@@ -167,6 +201,9 @@ class CraigslistAdapter(BaseAdapter):
             id_match = re.search(r"/(\d+)\.html", url)
             listing_id = id_match.group(1) if id_match else url
 
+            # Fetch coordinates from detail page
+            latitude, longitude = self._fetch_coordinates(url)
+
             # Extract thumbnail image URL
             thumbnail_url = None
             img_elem = listing.select_one("img, div.gallery img, .swipe img")
@@ -196,8 +233,8 @@ class CraigslistAdapter(BaseAdapter):
                 neighborhood=neighborhood,
                 city=self.city_name,
                 country="USA",
-                latitude=None,
-                longitude=None,
+                latitude=latitude,
+                longitude=longitude,
                 amenities=Amenities(),
                 description=None,
                 images=[],

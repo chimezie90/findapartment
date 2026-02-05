@@ -941,12 +941,14 @@ def api_fetch():
         'la': 'craigslist',
         'dubai': 'propertyfinder',
         'copenhagen': 'lejebolig',
+        'lisbon': 'casasapo',
+        'bali': 'rumah123',
     }
 
     if city not in working_scrapers:
         return jsonify({
             'success': False,
-            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, and Copenhagen have real listings.'
+            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, and Bali have real listings.'
         }), 400
 
     source = working_scrapers[city]

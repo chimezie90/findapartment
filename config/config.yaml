@@ -60,19 +60,15 @@ cities:
     display_name: "Dubai"
     currency: AED
     sources:
-      - findproperties
-    findproperties:
+      - propertyfinder
+    propertyfinder:
       emirate: dubai
 
   lisbon:
     display_name: "Lisbon"
     currency: EUR
     sources:
-      - idealista
-    idealista:
-      country: pt
-      center: "38.7223,-9.1393"
-      distance: 10000  # meters from center
+      - casasapo
 
   copenhagen:
     display_name: "Copenhagen"

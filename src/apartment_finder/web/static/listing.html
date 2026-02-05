@@ -546,6 +546,162 @@
             font-size: 0.85rem;
         }
 
+        /* About This Listing card */
+        .about-card {
+            position: relative;
+        }
+
+        .about-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .score-badge {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .score-circle {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .score-circle.green { background: #27ae60; }
+        .score-circle.yellow { background: #f39c12; }
+        .score-circle.red { background: #e74c3c; }
+        .score-circle.gray { background: #bdc3c7; }
+
+        .score-label-text {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .score-label-text.green { color: #27ae60; }
+        .score-label-text.yellow { color: #f39c12; }
+        .score-label-text.red { color: #e74c3c; }
+
+        .description-text {
+            margin: 15px 0;
+            color: #444;
+            line-height: 1.7;
+            white-space: pre-line;
+        }
+
+        .description-text.collapsed {
+            max-height: 120px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .description-text.collapsed::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 40px;
+            background: linear-gradient(transparent, white);
+        }
+
+        .read-more-btn {
+            background: none;
+            border: none;
+            color: #3498db;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 4px 0;
+        }
+
+        .read-more-btn:hover {
+            text-decoration: underline;
+        }
+
+        .feature-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 12px 0;
+        }
+
+        .feature-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            background: #e8f4f8;
+            color: #2980b9;
+        }
+
+        .pros-cons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        .pros-cons h4 {
+            font-size: 0.85rem;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .pros-cons h4.pro-label { color: #27ae60; }
+        .pros-cons h4.con-label { color: #e74c3c; }
+
+        .pros-cons ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .pros-cons li {
+            padding: 3px 0;
+            font-size: 0.9rem;
+            color: #555;
+        }
+
+        .pros-cons li::before {
+            margin-right: 6px;
+        }
+
+        .pro-item::before { content: '+'; color: #27ae60; font-weight: 700; }
+        .con-item::before { content: '-'; color: #e74c3c; font-weight: 700; }
+
+        .score-breakdown {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+
+        .breakdown-pill {
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: #f8f9fa;
+            color: #666;
+        }
+
         @media (max-width: 768px) {
             .listing-header {
                 flex-direction: column;
@@ -565,6 +721,10 @@
             }
 
             .ratings-row, .comments-row {
+                grid-template-columns: 1fr;
+            }
+
+            .pros-cons {
                 grid-template-columns: 1fr;
             }
         }
@@ -596,6 +756,32 @@
 
         <div class="card" id="listingCard">
             <div class="loading">Loading listing details...</div>
+        </div>
+
+        <div class="card about-card" id="aboutCard" style="display: none;">
+            <div class="about-header">
+                <h2>About This Listing</h2>
+                <div class="score-badge" id="scoreBadge">
+                    <div class="score-circle gray" id="scoreCircle">--</div>
+                    <span class="score-label-text" id="scoreLabelText">Loading</span>
+                </div>
+            </div>
+            <div class="description-text collapsed" id="descriptionText">
+                <span class="loading">Loading description...</span>
+            </div>
+            <button class="read-more-btn" id="readMoreBtn" style="display: none;" onclick="toggleDescription()">Read more</button>
+            <div class="feature-tags" id="featureTags"></div>
+            <div class="pros-cons" id="prosCons" style="display: none;">
+                <div>
+                    <h4 class="pro-label">Pros</h4>
+                    <ul id="prosList"></ul>
+                </div>
+                <div>
+                    <h4 class="con-label">Cons</h4>
+                    <ul id="consList"></ul>
+                </div>
+            </div>
+            <div class="score-breakdown" id="scoreBreakdown"></div>
         </div>
 
         <div class="card">
@@ -758,6 +944,8 @@
                 loadComments();
                 loadRatings();
                 loadGalleryImages();
+                loadDescription();
+                loadScore();
                 renderCitySuitability();
             } catch (error) {
                 document.getElementById('listingCard').innerHTML = `
@@ -827,6 +1015,124 @@
         function goToImage(idx) {
             currentImageIndex = idx;
             renderGallery();
+        }
+
+        // Description & Score
+        let descriptionExpanded = false;
+
+        async function loadDescription() {
+            try {
+                const response = await fetch(`/api/listing/${encodeURIComponent(listingId)}/description`);
+                const data = await response.json();
+                const descEl = document.getElementById('descriptionText');
+                const aboutCard = document.getElementById('aboutCard');
+                aboutCard.style.display = 'block';
+
+                if (data.description) {
+                    descEl.textContent = data.description;
+                    // Show read more if text is long
+                    if (data.description.length > 300) {
+                        document.getElementById('readMoreBtn').style.display = 'inline-block';
+                    } else {
+                        descEl.classList.remove('collapsed');
+                    }
+                } else {
+                    descEl.textContent = 'No description available for this listing.';
+                    descEl.classList.remove('collapsed');
+                }
+
+                // Render feature tags
+                if (data.features) {
+                    renderFeatureTags(data.features);
+                }
+            } catch (error) {
+                console.error('Error loading description:', error);
+                document.getElementById('aboutCard').style.display = 'block';
+                document.getElementById('descriptionText').textContent = 'Could not load description.';
+                document.getElementById('descriptionText').classList.remove('collapsed');
+            }
+        }
+
+        function renderFeatureTags(features) {
+            const tags = [];
+            if (features.bedrooms !== null && features.bedrooms !== undefined) {
+                tags.push(features.bedrooms === 0 ? 'Studio' : `${features.bedrooms} Bed`);
+            }
+            if (features.bathrooms !== null && features.bathrooms !== undefined) {
+                tags.push(`${features.bathrooms} Bath`);
+            }
+            if (features.sqft) tags.push(`${features.sqft} sqft`);
+            if (features.has_laundry) tags.push('Laundry');
+            if (features.has_dishwasher) tags.push('Dishwasher');
+            if (features.has_outdoor) tags.push('Outdoor Space');
+            if (features.has_doorman) tags.push('Doorman');
+            if (features.has_elevator) tags.push('Elevator');
+            if (features.has_gym) tags.push('Gym');
+            if (features.has_parking) tags.push('Parking');
+            if (features.is_furnished) tags.push('Furnished');
+            if (features.no_broker_fee) tags.push('No Broker Fee');
+            if (features.pets_allowed) tags.push('Pets OK');
+
+            const container = document.getElementById('featureTags');
+            if (tags.length > 0) {
+                container.innerHTML = tags.map(t => `<span class="feature-tag">${escapeHtml(t)}</span>`).join('');
+            }
+        }
+
+        function toggleDescription() {
+            const el = document.getElementById('descriptionText');
+            const btn = document.getElementById('readMoreBtn');
+            descriptionExpanded = !descriptionExpanded;
+            if (descriptionExpanded) {
+                el.classList.remove('collapsed');
+                btn.textContent = 'Show less';
+            } else {
+                el.classList.add('collapsed');
+                btn.textContent = 'Read more';
+            }
+        }
+
+        async function loadScore() {
+            try {
+                const response = await fetch(`/api/listing/${encodeURIComponent(listingId)}/score`);
+                const data = await response.json();
+                const aboutCard = document.getElementById('aboutCard');
+                aboutCard.style.display = 'block';
+
+                // Score circle
+                const circle = document.getElementById('scoreCircle');
+                const labelText = document.getElementById('scoreLabelText');
+                const score = data.score;
+                const colorClass = score >= 70 ? 'green' : score >= 50 ? 'yellow' : 'red';
+
+                circle.textContent = score;
+                circle.className = `score-circle ${colorClass}`;
+                labelText.textContent = data.label;
+                labelText.className = `score-label-text ${colorClass}`;
+
+                // Pros & Cons
+                if ((data.pros && data.pros.length) || (data.cons && data.cons.length)) {
+                    document.getElementById('prosCons').style.display = 'grid';
+                    document.getElementById('prosList').innerHTML =
+                        (data.pros || []).map(p => `<li class="pro-item">${escapeHtml(p)}</li>`).join('');
+                    document.getElementById('consList').innerHTML =
+                        (data.cons || []).map(c => `<li class="con-item">${escapeHtml(c)}</li>`).join('');
+                }
+
+                // Breakdown
+                if (data.breakdown) {
+                    const bd = data.breakdown;
+                    document.getElementById('scoreBreakdown').innerHTML = [
+                        `<span class="breakdown-pill">City ${bd.city_fit}/25</span>`,
+                        `<span class="breakdown-pill">Price ${bd.price}/25</span>`,
+                        `<span class="breakdown-pill">Features ${bd.features}/25</span>`,
+                        `<span class="breakdown-pill">Vibe ${bd.vibe}/15</span>`,
+                        `<span class="breakdown-pill">Preference ${bd.preference}/10</span>`,
+                    ].join('');
+                }
+            } catch (error) {
+                console.error('Error loading score:', error);
+            }
         }
 
         // City suitability data for E & A's criteria

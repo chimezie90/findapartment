@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -65,6 +66,12 @@ def init_db():
     # Add thumbnail_url column if it doesn't exist (for existing databases)
     try:
         conn.execute("ALTER TABLE seen_listings ADD COLUMN thumbnail_url TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add description column if it doesn't exist (for existing databases)
+    try:
+        conn.execute("ALTER TABLE seen_listings ADD COLUMN description TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
     conn.execute("CREATE INDEX IF NOT EXISTS idx_city_source ON seen_listings(city, source_name)")
@@ -437,6 +444,469 @@ def api_listing_images(source_id):
     except Exception as e:
         print(f"Error parsing images: {e}")
         return jsonify({'images': [], 'error': str(e)})
+
+
+##############################################################################
+# Scoring & Description helpers
+##############################################################################
+
+# City suitability data (server-side mirror of listing.html JS data)
+CITY_SUITABILITY = {
+    'New York City': {
+        'immigration': 3, 'work': 3, 'weather': 2, 'family_access': 3,
+        'calmness': 1, 'culture': 3, 'healthy_food': 3, 'fitness': 3,
+        'cost': 1, 'quality_of_life': 3,
+    },
+    'Los Angeles': {
+        'immigration': 3, 'work': 3, 'weather': 3, 'family_access': 2,
+        'calmness': 2, 'culture': 3, 'healthy_food': 3, 'fitness': 2,
+        'cost': 1, 'quality_of_life': 2,
+    },
+    'Dubai': {
+        'immigration': 3, 'work': 2, 'weather': 2, 'family_access': 1,
+        'calmness': 3, 'culture': 2, 'healthy_food': 3, 'fitness': 3,
+        'cost': 2, 'quality_of_life': 3,
+    },
+    'Lisbon': {
+        'immigration': 2, 'work': 2, 'weather': 3, 'family_access': 2,
+        'calmness': 3, 'culture': 3, 'healthy_food': 3, 'fitness': 2,
+        'cost': 3, 'quality_of_life': 3,
+    },
+    'Copenhagen': {
+        'immigration': 3, 'work': 2, 'weather': 1, 'family_access': 2,
+        'calmness': 3, 'culture': 3, 'healthy_food': 3, 'fitness': 3,
+        'cost': 1, 'quality_of_life': 3,
+    },
+    'Bali': {
+        'immigration': 3, 'work': 2, 'weather': 3, 'family_access': 1,
+        'calmness': 3, 'culture': 3, 'healthy_food': 3, 'fitness': 2,
+        'cost': 3, 'quality_of_life': 3,
+    },
+}
+
+# Approximate median rents per city (USD/month)
+CITY_MEDIAN_RENT = {
+    'New York City': 3200,
+    'Los Angeles': 2800,
+    'Dubai': 2000,
+    'Lisbon': 1200,
+    'Copenhagen': 1800,
+    'Bali': 800,
+}
+
+POSITIVE_VIBES = [
+    'spacious', 'bright', 'modern', 'renovated', 'quiet', 'luxury',
+    'charming', 'stunning', 'gorgeous', 'beautiful', 'sunny', 'cozy',
+    'elegant', 'pristine', 'designer', 'premium', 'penthouse',
+]
+
+RED_FLAGS = ['basement', 'no windows', 'windowless', 'sublet only', 'temporary']
+
+
+def extract_features(title, description):
+    """Parse title + description text and return a dict of detected features."""
+    text = f"{title or ''} {description or ''}".lower()
+
+    # Bedrooms
+    bedrooms = None
+    if 'studio' in text:
+        bedrooms = 0
+    else:
+        m = re.search(r'(\d+)\s*(?:bed|bedroom|br|bd)\b', text)
+        if m:
+            bedrooms = int(m.group(1))
+
+    # Bathrooms
+    bathrooms = None
+    m = re.search(r'(\d+)\s*(?:bath|ba)\b', text)
+    if m:
+        bathrooms = int(m.group(1))
+
+    # Square footage
+    sqft = None
+    m = re.search(r'(\d[\d,]*)\s*(?:sq\.?\s*ft|sf|sqft)\b', text)
+    if m:
+        sqft = int(m.group(1).replace(',', ''))
+
+    # Boolean features via keyword search
+    def has_keyword(*keywords):
+        return any(kw in text for kw in keywords)
+
+    features = {
+        'bedrooms': bedrooms,
+        'bathrooms': bathrooms,
+        'sqft': sqft,
+        'has_laundry': has_keyword('laundry', 'washer', 'dryer', 'w/d'),
+        'has_dishwasher': has_keyword('dishwasher', 'dish washer'),
+        'has_outdoor': has_keyword('balcony', 'outdoor', 'terrace', 'patio', 'roof', 'garden', 'yard', 'deck'),
+        'has_doorman': has_keyword('doorman', 'concierge'),
+        'has_elevator': has_keyword('elevator', 'lift'),
+        'has_gym': has_keyword('gym', 'fitness center', 'fitness centre'),
+        'has_parking': has_keyword('parking', 'garage'),
+        'is_furnished': has_keyword('furnished'),
+        'no_broker_fee': has_keyword('no fee', 'no broker', 'owner direct', 'no commission'),
+        'pets_allowed': has_keyword('pet', 'cat friendly', 'dog friendly', 'pets ok', 'pets allowed'),
+        'positive_vibes': [w for w in POSITIVE_VIBES if w in text],
+        'red_flags': [w for w in RED_FLAGS if w in text],
+    }
+    return features
+
+
+def _match_city(city_name):
+    """Find best-matching city key from our data dicts."""
+    if not city_name:
+        return None
+    for key in CITY_SUITABILITY:
+        if key.lower() in city_name.lower() or city_name.lower() in key.lower():
+            return key
+    return None
+
+
+def _get_preferences():
+    """Analyze existing ratings to build a preference profile."""
+    try:
+        conn = get_db()
+        cursor = conn.execute("""
+            SELECT r.listing_id, r.author, r.rating,
+                   l.title, l.price_usd, l.city, l.description
+            FROM ratings r
+            JOIN seen_listings l ON r.listing_id = l.source_id
+        """)
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+    except Exception:
+        rows = []
+
+    if len(rows) < 3:
+        return {'has_data': False}
+
+    happy_prices = []
+    sad_prices = []
+    city_scores = {}
+    feature_happy = {}
+    feature_sad = {}
+
+    for row in rows:
+        rating = row['rating']
+        price = row.get('price_usd')
+        city = row.get('city', '')
+        features = extract_features(row.get('title', ''), row.get('description', ''))
+
+        if rating == 'happy':
+            if price:
+                happy_prices.append(price)
+            city_scores[city] = city_scores.get(city, 0) + 1
+            for k, v in features.items():
+                if isinstance(v, bool) and v:
+                    feature_happy[k] = feature_happy.get(k, 0) + 1
+        elif rating == 'sad':
+            if price:
+                sad_prices.append(price)
+            city_scores[city] = city_scores.get(city, 0) - 1
+            for k, v in features.items():
+                if isinstance(v, bool) and v:
+                    feature_sad[k] = feature_sad.get(k, 0) + 1
+
+    ideal_price = sum(happy_prices) / len(happy_prices) if happy_prices else None
+
+    # Features that appear often in happy but not sad listings
+    boosted_features = []
+    for feat in feature_happy:
+        happy_ct = feature_happy.get(feat, 0)
+        sad_ct = feature_sad.get(feat, 0)
+        if happy_ct > sad_ct:
+            boosted_features.append(feat)
+
+    return {
+        'has_data': True,
+        'ideal_price': ideal_price,
+        'city_scores': city_scores,
+        'boosted_features': boosted_features,
+    }
+
+
+def compute_score(listing, features, preferences):
+    """Compute a 0-100 match score for a listing."""
+    city = listing.get('city', '')
+    price = listing.get('price_usd')
+    city_key = _match_city(city)
+
+    # --- City fit (25 points) ---
+    if city_key and city_key in CITY_SUITABILITY:
+        vals = list(CITY_SUITABILITY[city_key].values())
+        city_fit = (sum(vals) / len(vals)) / 3.0 * 25
+    else:
+        city_fit = 12  # neutral fallback
+
+    # --- Price value (25 points) ---
+    median = CITY_MEDIAN_RENT.get(city_key, 2500) if city_key else 2500
+    if price:
+        ratio = price / median
+        if ratio <= 0.8:
+            price_score = 25
+        elif ratio <= 1.0:
+            price_score = 20
+        elif ratio <= 1.2:
+            price_score = 15
+        elif ratio <= 1.5:
+            price_score = 10
+        else:
+            price_score = 5
+        # Learned adjustment
+        if preferences.get('has_data') and preferences.get('ideal_price'):
+            ideal = preferences['ideal_price']
+            diff = abs(price - ideal) / ideal
+            if diff < 0.1:
+                price_score = min(25, price_score + 5)
+            elif diff > 0.5:
+                price_score = max(0, price_score - 3)
+    else:
+        price_score = 12
+
+    # --- Features (25 points) ---
+    desirable = [
+        'has_laundry', 'has_dishwasher', 'has_outdoor', 'has_doorman',
+        'has_elevator', 'has_gym', 'has_parking', 'is_furnished',
+        'no_broker_fee', 'pets_allowed',
+    ]
+    feat_count = sum(1 for f in desirable if features.get(f))
+    feature_score = min(25, feat_count * 3)
+
+    # --- Vibe / quality (15 points) ---
+    vibe_count = len(features.get('positive_vibes', []))
+    red_count = len(features.get('red_flags', []))
+    vibe_score = min(15, vibe_count * 3) - (red_count * 5)
+    vibe_score = max(0, vibe_score)
+
+    # --- Preference match (10 points) ---
+    pref_score = 0
+    if preferences.get('has_data'):
+        boosted = preferences.get('boosted_features', [])
+        pref_hits = sum(1 for f in boosted if features.get(f))
+        pref_score = min(10, pref_hits * 3)
+        # City preference bonus
+        city_pref = preferences.get('city_scores', {}).get(city, 0)
+        if city_pref > 0:
+            pref_score = min(10, pref_score + 2)
+
+    total = round(city_fit + price_score + feature_score + vibe_score + pref_score)
+    total = max(0, min(100, total))
+
+    # Label
+    if total >= 85:
+        label = 'Great Match'
+    elif total >= 70:
+        label = 'Good Match'
+    elif total >= 50:
+        label = 'Decent'
+    elif total >= 35:
+        label = 'Below Average'
+    else:
+        label = 'Poor Match'
+
+    # Pros / Cons
+    pros = []
+    cons = []
+    if features.get('has_laundry'):
+        pros.append('In-unit laundry')
+    if features.get('has_outdoor'):
+        pros.append('Outdoor space')
+    if features.get('no_broker_fee'):
+        pros.append('No broker fee')
+    if features.get('has_dishwasher'):
+        pros.append('Dishwasher')
+    if features.get('has_doorman'):
+        pros.append('Doorman building')
+    if features.get('has_elevator'):
+        pros.append('Elevator')
+    if features.get('has_gym'):
+        pros.append('Gym access')
+    if features.get('has_parking'):
+        pros.append('Parking')
+    if features.get('is_furnished'):
+        pros.append('Furnished')
+    if features.get('pets_allowed'):
+        pros.append('Pets allowed')
+    vibes = features.get('positive_vibes', [])
+    if vibes:
+        pros.append(', '.join(v.capitalize() for v in vibes[:3]))
+
+    if price and city_key and price > CITY_MEDIAN_RENT.get(city_key, 2500):
+        cons.append('Above average price for area')
+    if not features.get('has_laundry'):
+        cons.append('No laundry mentioned')
+    if not features.get('has_parking'):
+        cons.append('No parking mentioned')
+    for flag in features.get('red_flags', []):
+        cons.append(flag.capitalize())
+
+    # Summary
+    beds_str = f"{features['bedrooms']}BR" if features.get('bedrooms') is not None else 'apartment'
+    if features.get('bedrooms') == 0:
+        beds_str = 'studio'
+    vibe_adj = vibes[0].capitalize() if vibes else 'Nice'
+    price_adj = 'fair' if price_score >= 18 else ('great' if price_score >= 22 else 'high')
+    city_short = city_key or city or 'Unknown'
+    top_feats = ', '.join(pros[:2]) if pros else 'basic amenities'
+    summary = f"{vibe_adj} {beds_str} in {city_short} at a {price_adj} price. Has {top_feats}."
+
+    return {
+        'score': total,
+        'label': label,
+        'summary': summary,
+        'pros': pros[:6],
+        'cons': cons[:4],
+        'breakdown': {
+            'city_fit': round(city_fit),
+            'price': round(price_score),
+            'features': round(feature_score),
+            'vibe': round(vibe_score),
+            'preference': round(pref_score),
+        },
+    }
+
+
+def scrape_description(listing):
+    """Scrape description from the original listing URL."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    url = listing.get('url')
+    if not url or url == '#':
+        return None
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    source = (listing.get('source_name') or '').lower()
+    description = None
+
+    # Craigslist
+    if 'craigslist' in source or 'craigslist.org' in url:
+        body = soup.select_one('#postingbody')
+        if body:
+            # Remove QR code div and boilerplate
+            for tag in body.select('.print-qrcode-container, .print-information'):
+                tag.decompose()
+            description = body.get_text(separator='\n').strip()
+
+    # Lejebolig
+    elif 'lejebolig' in source or 'lejebolig' in url:
+        parts = []
+        for sel in ['.description', '.lease-description']:
+            el = soup.select_one(sel)
+            if el:
+                parts.append(el.get_text(separator='\n').strip())
+        if parts:
+            description = '\n\n'.join(parts)
+
+    # PropertyFinder / FindProperties — __NEXT_DATA__ JSON
+    elif any(s in source for s in ['propertyfinder', 'findproperties']) or 'propertyfinder' in url:
+        script = soup.select_one('script#__NEXT_DATA__')
+        if script:
+            try:
+                data = json.loads(script.string)
+                # Navigate common Next.js structures
+                props = data.get('props', {}).get('pageProps', {})
+                desc = (props.get('description') or props.get('description_en')
+                        or props.get('listing', {}).get('description', ''))
+                if desc:
+                    description = desc
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    # Generic fallback
+    if not description:
+        # Try meta description
+        meta = soup.select_one('meta[name="description"]')
+        if meta and meta.get('content'):
+            description = meta['content']
+        else:
+            # Find first large paragraph
+            for p in soup.select('p'):
+                text = p.get_text().strip()
+                if len(text) > 100:
+                    description = text
+                    break
+
+    return description
+
+
+##############################################################################
+# New API endpoints: descriptions, scoring, preferences
+##############################################################################
+
+@app.route('/api/listing/<path:source_id>/description')
+def api_listing_description(source_id):
+    """Scrape & cache description, extract features."""
+    listing = get_listing(source_id)
+    if not listing:
+        return jsonify({'error': 'Listing not found'}), 404
+
+    description = listing.get('description')
+
+    # If not cached, scrape and store
+    if not description:
+        description = scrape_description(listing)
+        if description:
+            try:
+                conn = get_db()
+                conn.execute(
+                    "UPDATE seen_listings SET description = ? WHERE source_id = ?",
+                    (description, source_id),
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"Error saving description: {e}")
+
+    features = extract_features(listing.get('title', ''), description)
+    return jsonify({'description': description or '', 'features': features})
+
+
+@app.route('/api/listing/<path:source_id>/score')
+def api_listing_score(source_id):
+    """Compute match score for a listing."""
+    listing = get_listing(source_id)
+    if not listing:
+        return jsonify({'error': 'Listing not found'}), 404
+
+    features = extract_features(listing.get('title', ''), listing.get('description', ''))
+    preferences = _get_preferences()
+    result = compute_score(listing, features, preferences)
+    return jsonify(result)
+
+
+@app.route('/api/scores')
+def api_bulk_scores():
+    """Bulk scores for all listings (main page)."""
+    listings = get_listings()
+    preferences = _get_preferences()
+    scores = {}
+    for listing in listings:
+        features = extract_features(listing.get('title', ''), listing.get('description', ''))
+        result = compute_score(listing, features, preferences)
+        scores[listing['source_id']] = {
+            'score': result['score'],
+            'label': result['label'],
+        }
+    return jsonify(scores)
+
+
+@app.route('/api/preferences')
+def api_preferences():
+    """Learned preference profile from ratings."""
+    prefs = _get_preferences()
+    return jsonify(prefs)
 
 
 @app.route('/api/stats')

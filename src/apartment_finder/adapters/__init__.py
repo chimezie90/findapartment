@@ -29,15 +29,28 @@ def list_available_adapters() -> list:
     return list(ADAPTER_REGISTRY.keys())
 
 
-# Import adapters to register them
-from . import craigslist  # noqa: E402, F401
-from . import bayut  # noqa: E402, F401
-from . import idealista  # noqa: E402, F401
-from . import streeteasy  # noqa: E402, F401
-from . import renthop  # noqa: E402, F401
-from . import findproperties  # noqa: E402, F401
-from . import boligportal  # noqa: E402, F401
-from . import lejebolig  # noqa: E402, F401
+# Import adapters to register them – tolerate missing dependencies so the web
+# app can still start even if a scraper's libraries aren't installed.
+import importlib as _importlib
+import logging as _logging
+
+_logger = _logging.getLogger(__name__)
+
+for _name in [
+    "craigslist",
+    "bayut",
+    "idealista",
+    "streeteasy",
+    "renthop",
+    "findproperties",
+    "boligportal",
+    "lejebolig",
+    "propertyfinder",
+]:
+    try:
+        _importlib.import_module(f".{_name}", __name__)
+    except Exception as _exc:
+        _logger.warning("Could not load adapter %s: %s", _name, _exc)
 
 __all__ = [
     "BaseAdapter",

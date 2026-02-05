@@ -6,7 +6,6 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import requests
 from bs4 import BeautifulSoup
 
 from ..models.apartment import Amenities, Apartment
@@ -37,39 +36,45 @@ class CasaSapoAdapter(BaseAdapter):
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
         """Fetch apartment listings from CASA SAPO."""
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            logger.error("Camoufox not installed. Run: pip install camoufox && python -m camoufox fetch")
+            return []
+
         apartments = []
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-GB,en;q=0.9,pt;q=0.8",
-        }
+        try:
+            with Camoufox(headless=True) as browser:
+                page = browser.new_page()
 
-        # Scrape first 2 pages
-        for page in range(1, 3):
-            url = f"{self.BASE_URL}/en-gb/rent-apartments/lisboa/"
-            if page > 1:
-                url += f"?pn={page}"
+                # Scrape first 2 pages
+                for pg in range(1, 3):
+                    url = f"{self.BASE_URL}/en-gb/rent-apartments/lisboa/"
+                    if pg > 1:
+                        url += f"?pn={pg}"
 
-            try:
-                logger.info(f"Fetching CASA SAPO page {page} for Lisbon")
-                response = requests.get(url, headers=headers, timeout=30)
-                response.raise_for_status()
+                    try:
+                        logger.info(f"Fetching CASA SAPO page {pg} for Lisbon")
+                        page.goto(url, timeout=60000)
+                        page.wait_for_timeout(3000)
+                        html = page.content()
 
-                soup = BeautifulSoup(response.text, "html.parser")
-                page_listings = self._extract_listings(soup)
+                        soup = BeautifulSoup(html, "html.parser")
+                        page_listings = self._extract_listings(soup)
 
-                logger.debug(f"Page {page}: found {len(page_listings)} listings")
+                        logger.debug(f"Page {pg}: found {len(page_listings)} listings")
 
-                for item in page_listings:
-                    apartment = self._normalize(item, criteria)
-                    if apartment:
-                        apartments.append(apartment)
+                        for item in page_listings:
+                            apartment = self._normalize(item, criteria)
+                            if apartment:
+                                apartments.append(apartment)
 
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error fetching CASA SAPO page {page}: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error on page {page}: {e}")
+                    except Exception as e:
+                        logger.error(f"Error fetching CASA SAPO page {pg}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error launching browser for CASA SAPO: {e}")
 
         logger.info(f"Fetched {len(apartments)} listings from CASA SAPO")
         return apartments

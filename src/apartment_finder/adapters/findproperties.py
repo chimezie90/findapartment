@@ -6,8 +6,6 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from ..models.apartment import Amenities, Apartment
 from ..utils.retry import retry_with_backoff
 from . import register_adapter
@@ -33,24 +31,26 @@ class FindPropertiesAdapter(BaseAdapter):
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
         """Fetch apartment listings from FindProperties.ae."""
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            logger.error("Camoufox not installed. Run: pip install camoufox && python -m camoufox fetch")
+            return []
+
         apartments = []
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-
-        # Build URL - site uses AED prices
         url = f"{self.BASE_URL}/for-rent/apartments/{self.emirate}"
 
         try:
             logger.info(f"Fetching FindProperties listings for {self.emirate}")
 
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
+            with Camoufox(headless=True) as browser:
+                page = browser.new_page()
+                page.goto(url, timeout=60000)
+                page.wait_for_timeout(3000)
+                html = page.content()
 
             # Extract JSON data from __NEXT_DATA__
-            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', response.text)
+            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html)
             if not match:
                 logger.error("Could not find __NEXT_DATA__ in response")
                 return []
@@ -63,12 +63,10 @@ class FindPropertiesAdapter(BaseAdapter):
                 if apartment:
                     apartments.append(apartment)
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching from FindProperties: {e}")
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing FindProperties JSON: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Error fetching from FindProperties: {e}")
 
         logger.info(f"Fetched {len(apartments)} listings from FindProperties")
         return apartments

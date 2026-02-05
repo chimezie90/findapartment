@@ -228,7 +228,64 @@
             padding: 10px 0;
         }
 
+        /* Ratings */
+        .ratings-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .rating-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .rating-card h3 {
+            margin: 0 0 12px 0;
+            font-size: 1rem;
+            color: #2c3e50;
+        }
+
+        .rating-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .rating-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 2px solid #ddd;
+            background: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .rating-btn:hover {
+            border-color: #3498db;
+            transform: scale(1.1);
+        }
+
+        .rating-btn.active {
+            border-color: #3498db;
+            background: #e8f4f8;
+            box-shadow: 0 0 0 3px rgba(52,152,219,0.2);
+        }
+
         /* Comments */
+        .comments-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
         .comment {
             padding: 15px;
             background: #f8f9fa;
@@ -266,15 +323,6 @@
             font-family: inherit;
             resize: vertical;
             min-height: 80px;
-        }
-
-        .comment-form input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 1rem;
-            margin-top: 10px;
         }
 
         .comment-form button {
@@ -515,6 +563,10 @@
                 width: 60px;
                 height: 45px;
             }
+
+            .ratings-row, .comments-row {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -624,12 +676,43 @@
         </div>
 
         <div class="card">
-            <h2>Comments</h2>
-            <div id="commentsList"></div>
-            <div class="comment-form">
-                <input type="text" id="commentAuthor" placeholder="Your name (optional)">
-                <textarea id="commentText" placeholder="Add a comment about this listing..."></textarea>
-                <button onclick="submitComment()">Post Comment</button>
+            <h2>Our Ratings</h2>
+            <div class="ratings-row">
+                <div class="rating-card">
+                    <h3>Adoyo</h3>
+                    <div class="rating-buttons">
+                        <button class="rating-btn" data-author="Adoyo" data-rating="happy" onclick="submitRating('Adoyo','happy')">😊</button>
+                        <button class="rating-btn" data-author="Adoyo" data-rating="neutral" onclick="submitRating('Adoyo','neutral')">😐</button>
+                        <button class="rating-btn" data-author="Adoyo" data-rating="sad" onclick="submitRating('Adoyo','sad')">😢</button>
+                    </div>
+                </div>
+                <div class="rating-card">
+                    <h3>Emmanuel</h3>
+                    <div class="rating-buttons">
+                        <button class="rating-btn" data-author="Emmanuel" data-rating="happy" onclick="submitRating('Emmanuel','happy')">😊</button>
+                        <button class="rating-btn" data-author="Emmanuel" data-rating="neutral" onclick="submitRating('Emmanuel','neutral')">😐</button>
+                        <button class="rating-btn" data-author="Emmanuel" data-rating="sad" onclick="submitRating('Emmanuel','sad')">😢</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="comments-row">
+            <div class="card">
+                <h2>Adoyo's Notes</h2>
+                <div id="commentsAdoyo"></div>
+                <div class="comment-form">
+                    <textarea id="commentTextAdoyo" placeholder="Add a note..."></textarea>
+                    <button onclick="submitComment('Adoyo')">Post</button>
+                </div>
+            </div>
+            <div class="card">
+                <h2>Emmanuel's Notes</h2>
+                <div id="commentsEmmanuel"></div>
+                <div class="comment-form">
+                    <textarea id="commentTextEmmanuel" placeholder="Add a note..."></textarea>
+                    <button onclick="submitComment('Emmanuel')">Post</button>
+                </div>
             </div>
         </div>
     </div>
@@ -673,6 +756,7 @@
                 initMap();
                 loadNearbyPlaces();
                 loadComments();
+                loadRatings();
                 loadGalleryImages();
                 renderCitySuitability();
             } catch (error) {
@@ -1290,10 +1374,13 @@
         }
 
         function getGoogleMapsUrl(place) {
+            // Always include place name in search so Google Maps finds the actual business
+            const placeName = encodeURIComponent(place.name);
             if (place.lat && place.lng) {
-                return `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`;
+                // Use search URL with place name and coordinates for accuracy
+                return `https://www.google.com/maps/search/${placeName}/@${place.lat},${place.lng},17z`;
             }
-            return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`;
+            return `https://www.google.com/maps/search/?api=1&query=${placeName}`;
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -1314,27 +1401,56 @@
             return (meters / 1000).toFixed(1) + 'km';
         }
 
+        async function loadRatings() {
+            try {
+                const response = await fetch(`/api/listing/${encodeURIComponent(listingId)}/ratings`);
+                const ratings = await response.json();
+                ratings.forEach(r => {
+                    document.querySelectorAll(`.rating-btn[data-author="${r.author}"]`).forEach(btn => {
+                        btn.classList.toggle('active', btn.dataset.rating === r.rating);
+                    });
+                });
+            } catch (error) {
+                console.error('Error loading ratings:', error);
+            }
+        }
+
+        async function submitRating(author, rating) {
+            try {
+                const response = await fetch(`/api/listing/${encodeURIComponent(listingId)}/ratings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ author, rating })
+                });
+                if (response.ok) {
+                    loadRatings();
+                }
+            } catch (error) {
+                console.error('Error submitting rating:', error);
+            }
+        }
+
         async function loadComments() {
             try {
                 const response = await fetch(`/api/listing/${encodeURIComponent(listingId)}/comments`);
                 const comments = await response.json();
-                renderComments(comments);
+                renderCommentsForAuthor('commentsAdoyo', comments.filter(c => c.author === 'Adoyo'));
+                renderCommentsForAuthor('commentsEmmanuel', comments.filter(c => c.author === 'Emmanuel'));
             } catch (error) {
                 console.error('Error loading comments:', error);
             }
         }
 
-        function renderComments(comments) {
-            const container = document.getElementById('commentsList');
+        function renderCommentsForAuthor(containerId, comments) {
+            const container = document.getElementById(containerId);
             if (comments.length === 0) {
-                container.innerHTML = '<p class="no-places">No comments yet. Be the first to comment!</p>';
+                container.innerHTML = '<p class="no-places">No notes yet.</p>';
                 return;
             }
-
             container.innerHTML = comments.map(comment => `
                 <div class="comment">
                     <div class="comment-header">
-                        <span class="comment-author">${escapeHtml(comment.author || 'Anonymous')}</span>
+                        <span class="comment-author">${escapeHtml(comment.author)}</span>
                         <span>${formatDate(comment.created_at)}</span>
                     </div>
                     <div class="comment-text">${escapeHtml(comment.text)}</div>
@@ -1342,12 +1458,12 @@
             `).join('');
         }
 
-        async function submitComment() {
-            const author = document.getElementById('commentAuthor').value.trim();
-            const text = document.getElementById('commentText').value.trim();
+        async function submitComment(author) {
+            const textarea = document.getElementById('commentText' + author);
+            const text = textarea.value.trim();
 
             if (!text) {
-                alert('Please enter a comment');
+                alert('Please enter a note');
                 return;
             }
 
@@ -1359,14 +1475,13 @@
                 });
 
                 if (response.ok) {
-                    document.getElementById('commentAuthor').value = '';
-                    document.getElementById('commentText').value = '';
+                    textarea.value = '';
                     loadComments();
                 } else {
-                    alert('Failed to post comment');
+                    alert('Failed to post note');
                 }
             } catch (error) {
-                alert('Error posting comment: ' + error.message);
+                alert('Error posting note: ' + error.message);
             }
         }
 

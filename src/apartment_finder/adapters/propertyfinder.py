@@ -6,7 +6,6 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import requests
 from bs4 import BeautifulSoup
 
 from ..models.apartment import Amenities, Apartment
@@ -38,23 +37,25 @@ class PropertyFinderAdapter(BaseAdapter):
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
         """Fetch apartment listings from PropertyFinder.ae."""
+        try:
+            from camoufox.sync_api import Camoufox
+        except ImportError:
+            logger.error("Camoufox not installed. Run: pip install camoufox && python -m camoufox fetch")
+            return []
+
         apartments = []
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
         url = f"{self.BASE_URL}/en/rent/{self.emirate}/apartments-for-rent.html"
 
         try:
             logger.info(f"Fetching PropertyFinder listings for {self.emirate}")
 
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
+            with Camoufox(headless=True) as browser:
+                page = browser.new_page()
+                page.goto(url, timeout=60000)
+                page.wait_for_timeout(3000)
+                html = page.content()
 
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
             listings = self._extract_jsonld_listings(soup)
 
             logger.debug(f"Found {len(listings)} JSON-LD listings")
@@ -64,12 +65,10 @@ class PropertyFinderAdapter(BaseAdapter):
                 if apartment:
                     apartments.append(apartment)
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching from PropertyFinder: {e}")
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing PropertyFinder JSON: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Error fetching from PropertyFinder: {e}")
 
         logger.info(f"Fetched {len(apartments)} listings from PropertyFinder")
         return apartments

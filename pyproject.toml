@@ -28,6 +28,9 @@ dev = [
     "black>=23.0",
     "ruff>=0.1",
 ]
+browser = [
+    "camoufox",
+]
 sendgrid = [
     "sendgrid>=6.10",
 ]

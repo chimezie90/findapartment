@@ -1,13 +1,10 @@
-"""Deduplication service using SQLite to track seen listings."""
+"""Deduplication service using PostgreSQL to track seen listings."""
 
 import logging
-import os
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import List, Optional
 
+from ..db import get_connection, init_db
 from ..models.apartment import Apartment
 
 logger = logging.getLogger(__name__)
@@ -15,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class DeduplicationService:
     """
-    Track seen listings using SQLite to avoid showing repeats.
+    Track seen listings using PostgreSQL to avoid showing repeats.
 
     Features:
     - Persist listing IDs across runs
@@ -24,69 +21,10 @@ class DeduplicationService:
     - Mark listings as sent in email
     """
 
-    DEFAULT_DB_PATH = "./data/listings.db"
     EXPIRY_DAYS = 30  # Remove listings not seen for this many days
 
-    def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or os.getenv("DATABASE_PATH", self.DEFAULT_DB_PATH)
-        self._ensure_db_directory()
-        self._init_db()
-
-    def _ensure_db_directory(self) -> None:
-        """Create data directory if it doesn't exist."""
-        db_dir = Path(self.db_path).parent
-        if db_dir and not db_dir.exists():
-            db_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created database directory: {db_dir}")
-
-    @contextmanager
-    def _get_connection(self):
-        """Context manager for database connections."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    def _init_db(self) -> None:
-        """Initialize database schema."""
-        with self._get_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS seen_listings (
-                    source_id TEXT PRIMARY KEY,
-                    source_name TEXT NOT NULL,
-                    city TEXT NOT NULL,
-                    title TEXT,
-                    price_usd REAL,
-                    url TEXT,
-                    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    sent_in_email BOOLEAN DEFAULT FALSE,
-                    sent_at TIMESTAMP
-                )
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_city_source
-                ON seen_listings(city, source_name)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_last_seen
-                ON seen_listings(last_seen_at)
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_sent_in_email
-                ON seen_listings(sent_in_email)
-            """)
-
-        logger.debug(f"Database initialized at {self.db_path}")
+    def __init__(self):
+        init_db()
 
     def filter_new_listings(self, apartments: List[Apartment]) -> List[Apartment]:
         """
@@ -106,21 +44,23 @@ class DeduplicationService:
 
         new_apartments = []
 
-        with self._get_connection() as conn:
+        with get_connection() as conn:
+            cur = conn.cursor()
             for apt in apartments:
                 # Check if we've seen this listing
-                row = conn.execute(
-                    "SELECT source_id, sent_in_email FROM seen_listings WHERE source_id = ?",
+                cur.execute(
+                    "SELECT source_id, sent_in_email FROM seen_listings WHERE source_id = %s",
                     (apt.source_id,),
-                ).fetchone()
+                )
+                row = cur.fetchone()
 
                 if row is None:
                     # New listing - add to DB and results
-                    conn.execute(
+                    cur.execute(
                         """
                         INSERT INTO seen_listings
                         (source_id, source_name, city, title, price_usd, url)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
                             apt.source_id,
@@ -135,16 +75,16 @@ class DeduplicationService:
 
                 elif not row["sent_in_email"]:
                     # Seen before but never emailed - include again
-                    conn.execute(
-                        "UPDATE seen_listings SET last_seen_at = ? WHERE source_id = ?",
+                    cur.execute(
+                        "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
                         (datetime.utcnow(), apt.source_id),
                     )
                     new_apartments.append(apt)
 
                 else:
                     # Already sent - just update last_seen
-                    conn.execute(
-                        "UPDATE seen_listings SET last_seen_at = ? WHERE source_id = ?",
+                    cur.execute(
+                        "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
                         (datetime.utcnow(), apt.source_id),
                     )
 
@@ -156,11 +96,12 @@ class DeduplicationService:
         if not apartments:
             return
 
-        with self._get_connection() as conn:
+        with get_connection() as conn:
+            cur = conn.cursor()
             now = datetime.utcnow()
             for apt in apartments:
-                conn.execute(
-                    "UPDATE seen_listings SET sent_in_email = TRUE, sent_at = ? WHERE source_id = ?",
+                cur.execute(
+                    "UPDATE seen_listings SET sent_in_email = TRUE, sent_at = %s WHERE source_id = %s",
                     (now, apt.source_id),
                 )
 
@@ -180,12 +121,13 @@ class DeduplicationService:
         days = days or self.EXPIRY_DAYS
         cutoff = datetime.utcnow() - timedelta(days=days)
 
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM seen_listings WHERE last_seen_at < ?",
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM seen_listings WHERE last_seen_at < %s",
                 (cutoff,),
             )
-            count = cursor.rowcount
+            count = cur.rowcount
 
         if count > 0:
             logger.info(f"Cleaned up {count} listings older than {days} days")
@@ -193,22 +135,28 @@ class DeduplicationService:
 
     def get_stats(self) -> dict:
         """Get statistics about tracked listings."""
-        with self._get_connection() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM seen_listings").fetchone()[0]
-            sent = conn.execute(
-                "SELECT COUNT(*) FROM seen_listings WHERE sent_in_email = TRUE"
-            ).fetchone()[0]
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) AS cnt FROM seen_listings")
+            total = cur.fetchone()['cnt']
+
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM seen_listings WHERE sent_in_email = TRUE"
+            )
+            sent = cur.fetchone()['cnt']
 
             by_city = {}
-            for row in conn.execute(
-                "SELECT city, COUNT(*) as count FROM seen_listings GROUP BY city"
-            ):
+            cur.execute(
+                "SELECT city, COUNT(*) AS count FROM seen_listings GROUP BY city"
+            )
+            for row in cur.fetchall():
                 by_city[row["city"]] = row["count"]
 
             by_source = {}
-            for row in conn.execute(
-                "SELECT source_name, COUNT(*) as count FROM seen_listings GROUP BY source_name"
-            ):
+            cur.execute(
+                "SELECT source_name, COUNT(*) AS count FROM seen_listings GROUP BY source_name"
+            )
+            for row in cur.fetchall():
                 by_source[row["source_name"]] = row["count"]
 
             return {
@@ -220,6 +168,7 @@ class DeduplicationService:
 
     def reset(self) -> None:
         """Clear all tracked listings. Use with caution."""
-        with self._get_connection() as conn:
-            conn.execute("DELETE FROM seen_listings")
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM seen_listings")
         logger.warning("All tracked listings have been reset")

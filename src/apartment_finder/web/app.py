@@ -870,7 +870,7 @@ def api_fetch():
             text=True,
             timeout=180,
             cwd=str(project_root),
-            env={**os.environ, 'PYTHONPATH': str(project_root / 'src')}
+            env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
         )
 
         if result.returncode == 0:

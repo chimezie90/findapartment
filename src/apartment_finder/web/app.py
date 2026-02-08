@@ -5,9 +5,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, jsonify, send_from_directory, request
+import requests as http_requests
 
 from ..db import get_connection, init_db
 
@@ -88,7 +90,8 @@ def get_listings():
                     latitude,
                     longitude,
                     thumbnail_url,
-                    description
+                    description,
+                    neighborhood
                 FROM seen_listings
                 ORDER BY first_seen_at DESC
             """)
@@ -343,6 +346,136 @@ def api_listing_images(source_id):
     except Exception as e:
         print(f"Error parsing images: {e}")
         return jsonify({'images': [], 'error': str(e)})
+
+
+##############################################################################
+# Geocoding helpers
+##############################################################################
+
+# Track last Nominatim request time (1 req/sec policy)
+_last_nominatim_request = 0.0
+
+
+def _extract_location_hints(title, description):
+    """Extract neighborhood/location hints from title and description text."""
+    hints = []
+    text = f"{title or ''} {description or ''}"
+
+    # Parenthesized text: "(Upper East Side)" or "(Williamsburg)"
+    for match in re.findall(r'\(([^)]{3,40})\)', text):
+        # Skip things that look like prices, sizes, or common non-location parens
+        if re.search(r'\d{3,}|\$|sq\s*ft|bed|bath|br\b|ba\b', match, re.IGNORECASE):
+            continue
+        hints.append(match.strip())
+
+    # "in {neighborhood}" pattern
+    for match in re.findall(r'\bin\s+([A-Z][A-Za-z\s]{2,30})(?:\s*[,\-.|!]|\s*$)', text):
+        hints.append(match.strip())
+
+    # "near {landmark}" pattern
+    for match in re.findall(r'\bnear\s+([A-Z][A-Za-z\s]{2,30})(?:\s*[,\-.|!]|\s*$)', text):
+        hints.append(match.strip())
+
+    return hints
+
+
+def geocode_listing(listing):
+    """Try to geocode a listing using Nominatim from title/description hints.
+
+    Returns (lat, lng) or (None, None).
+    """
+    global _last_nominatim_request
+
+    city = listing.get('city', '')
+    neighborhood = listing.get('neighborhood')
+
+    # Build list of search queries to try, best first
+    queries = []
+    if neighborhood:
+        queries.append(f"{neighborhood}, {city}")
+
+    hints = _extract_location_hints(listing.get('title'), listing.get('description'))
+    for hint in hints:
+        queries.append(f"{hint}, {city}")
+
+    if not queries:
+        return None, None
+
+    headers = {"User-Agent": "FindApartment/1.0 (apartment search tool)"}
+
+    for query in queries[:3]:  # Try at most 3 queries
+        # Respect Nominatim rate limit (1 req/sec)
+        now = time.time()
+        wait = 1.0 - (now - _last_nominatim_request)
+        if wait > 0:
+            time.sleep(wait)
+
+        try:
+            resp = http_requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": query, "format": "json", "limit": 1},
+                headers=headers,
+                timeout=10,
+            )
+            _last_nominatim_request = time.time()
+            resp.raise_for_status()
+            results = resp.json()
+            if results:
+                lat = float(results[0]["lat"])
+                lng = float(results[0]["lon"])
+                return lat, lng
+        except Exception as e:
+            print(f"Nominatim error for '{query}': {e}")
+            _last_nominatim_request = time.time()
+
+    return None, None
+
+
+@app.route('/api/listing/<path:source_id>/geocode')
+def api_listing_geocode(source_id):
+    """Geocode a listing by extracting location hints and querying Nominatim.
+
+    Returns cached coords if available; otherwise geocodes, saves to DB, and returns.
+    """
+    listing = get_listing(source_id)
+    if not listing:
+        return jsonify({'error': 'Listing not found'}), 404
+
+    # Already has coords — return immediately
+    if listing.get('latitude') and listing.get('longitude'):
+        return jsonify({
+            'latitude': listing['latitude'],
+            'longitude': listing['longitude'],
+            'source': 'original',
+        })
+
+    # Try geocoding
+    lat, lng = geocode_listing(listing)
+
+    if lat is not None and lng is not None:
+        # Cache in DB
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE seen_listings SET latitude = %s, longitude = %s WHERE source_id = %s",
+                    (lat, lng, source_id),
+                )
+        except Exception as e:
+            print(f"Error saving geocoded coords: {e}")
+
+        return jsonify({
+            'latitude': lat,
+            'longitude': lng,
+            'source': 'geocoded',
+        })
+
+    # Geocoding failed — return nulls (frontend falls back to city center)
+    return jsonify({
+        'latitude': None,
+        'longitude': None,
+        'source': 'none',
+    })
 
 
 ##############################################################################

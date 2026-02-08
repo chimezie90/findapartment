@@ -939,6 +939,23 @@
                 if (!response.ok) throw new Error('Listing not found');
                 listing = await response.json();
                 renderListing();
+
+                // If no coords, try geocoding from neighborhood/title hints
+                if (!listing.latitude || !listing.longitude) {
+                    try {
+                        const geoResp = await fetch(`/api/listing/${encodeURIComponent(listingId)}/geocode`);
+                        if (geoResp.ok) {
+                            const geoData = await geoResp.json();
+                            if (geoData.latitude && geoData.longitude) {
+                                listing.latitude = geoData.latitude;
+                                listing.longitude = geoData.longitude;
+                            }
+                        }
+                    } catch (geoErr) {
+                        console.warn('Geocoding failed, using city center fallback:', geoErr);
+                    }
+                }
+
                 initMap();
                 loadNearbyPlaces();
                 loadComments();

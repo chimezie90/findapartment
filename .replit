@@ -44,12 +44,12 @@ command = "python -m apartment_finder.main --city la --source craigslist"
 [[scheduled]]
 name = "fetch-dubai-morning"
 cron = "10 8 * * *"
-command = "python -m apartment_finder.main --city dubai --source findproperties"
+command = "python -m apartment_finder.main --city dubai --source propertyfinder"
 
 [[scheduled]]
 name = "fetch-dubai-evening"
 cron = "10 20 * * *"
-command = "python -m apartment_finder.main --city dubai --source findproperties"
+command = "python -m apartment_finder.main --city dubai --source propertyfinder"
 
 [[scheduled]]
 name = "fetch-copenhagen-morning"

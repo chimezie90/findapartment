@@ -212,6 +212,16 @@
             color: #666;
         }
 
+        .listing-summary {
+            font-size: 0.85rem;
+            color: #555;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
         .listing-meta span {
             display: flex;
             align-items: center;
@@ -905,6 +915,17 @@
             return null;
         }
 
+        function getListingSummary(listing) {
+            let text = listing.description;
+            if (text) {
+                // Strip leading whitespace/newlines, take first meaningful sentence(s)
+                text = text.replace(/^\s+/, '').split(/\n/)[0].trim();
+                if (text.length > 150) text = text.substring(0, 147) + '...';
+                return `<div class="listing-summary">${escapeHtml(text)}</div>`;
+            }
+            return '';
+        }
+
         function renderListings() {
             const filtered = getFilteredListings();
             const container = document.getElementById('listingsContainer');
@@ -939,6 +960,7 @@
                         <div class="listing-title">
                             ${escapeHtml(listing.title || 'Untitled')}
                         </div>
+                        ${getListingSummary(listing)}
                         <div class="listing-meta">
                             <span class="tag ${getCityClass(listing.city)}">${escapeHtml(listing.city || 'Unknown')}</span>
                             <span class="tag ${getSourceClass(listing.source_name)}">${escapeHtml(listing.source_name || 'Unknown')}</span>

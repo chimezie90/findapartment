@@ -806,20 +806,27 @@
             const sources = [...new Set(allListings.map(l => l.source_name))].sort();
 
             const cityFilter = document.getElementById('cityFilter');
+            const prevCity = cityFilter.value;
+            // Clear all options except the first "All Cities" default
+            while (cityFilter.options.length > 1) cityFilter.remove(1);
             cities.forEach(city => {
                 const option = document.createElement('option');
                 option.value = city;
                 option.textContent = city;
                 cityFilter.appendChild(option);
             });
+            cityFilter.value = prevCity;
 
             const sourceFilter = document.getElementById('sourceFilter');
+            const prevSource = sourceFilter.value;
+            while (sourceFilter.options.length > 1) sourceFilter.remove(1);
             sources.forEach(source => {
                 const option = document.createElement('option');
                 option.value = source;
                 option.textContent = source;
                 sourceFilter.appendChild(option);
             });
+            sourceFilter.value = prevSource;
         }
 
         function getFilteredListings() {

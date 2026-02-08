@@ -61,6 +61,26 @@ name = "fetch-copenhagen-evening"
 cron = "15 20 * * *"
 command = "python -m apartment_finder.main --city copenhagen --source lejebolig"
 
+[[scheduled]]
+name = "fetch-lisbon-morning"
+cron = "20 8 * * *"
+command = "python -m apartment_finder.main --city lisbon --source casasapo"
+
+[[scheduled]]
+name = "fetch-lisbon-evening"
+cron = "20 20 * * *"
+command = "python -m apartment_finder.main --city lisbon --source casasapo"
+
+[[scheduled]]
+name = "fetch-bali-morning"
+cron = "25 8 * * *"
+command = "python -m apartment_finder.main --city bali --source rumah123"
+
+[[scheduled]]
+name = "fetch-bali-evening"
+cron = "25 20 * * *"
+command = "python -m apartment_finder.main --city bali --source rumah123"
+
 [workflows]
 runButton = "Project"
 

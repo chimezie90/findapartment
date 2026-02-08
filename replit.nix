@@ -1,5 +1,6 @@
 { pkgs }: {
   deps = [
+    pkgs.sqlite
     pkgs.python312
     pkgs.python312Packages.pip
     pkgs.python312Packages.flask

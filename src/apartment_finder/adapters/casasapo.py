@@ -71,21 +71,23 @@ class CasaSapoAdapter(BaseAdapter):
         return apartments
 
     def _extract_listings(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
-        """Extract Offer objects from JSON-LD and pair with detail URLs."""
+        """Extract Offer objects from JSON-LD.
+
+        Each Offer has all needed data (title, price, image, geo, description).
+        We extract a stable property ID from the image URL and build detail
+        links by matching <a> tags whose titles reference the listing.
+        """
         offers = []
 
-        # Collect detail URLs from listing links
-        # CASA SAPO uses SEO-friendly URLs like:
-        #   /en-gb/rent-apartments/apartment/2-bedrooms/refurbished/lisboa/...
-        #   /en-gb/rent-apartments/studio/lisboa/...
-        detail_urls = []
-        for a in soup.select('a[href*="/en-gb/rent-apartments/"]'):
+        # Build a lookup of detail links by matching title attributes
+        # Listing links have title="Properties to Rent, Apartments - ..."
+        detail_link_map = {}
+        for a in soup.select('a[href*="/en-gb/rent-apartments/"][title]'):
+            title_attr = a.get("title", "")
             href = a.get("href", "")
-            # Match individual listing URLs (contain /apartment/ or /studio/ with location info)
-            if re.search(r'/rent-apartments/(?:apartment|studio)/.+/lisboa/', href):
+            if "Apartments -" in title_attr and ("?zo=" in href or "/has-" in href):
                 full_url = href if href.startswith("http") else self.BASE_URL + href
-                if full_url not in detail_urls:
-                    detail_urls.append(full_url)
+                detail_link_map[title_attr] = full_url
 
         # Parse JSON-LD script tags
         for script in soup.select('script[type="application/ld+json"]'):
@@ -100,12 +102,22 @@ class CasaSapoAdapter(BaseAdapter):
                 if isinstance(item_type, list):
                     item_type = item_type[0] if item_type else ""
                 if item_type == "Offer":
-                    offers.append(item)
+                    # Try to match a detail link by checking if the offer name
+                    # appears in any link title
+                    offer_name = item.get("name", "")
+                    for link_title, link_url in detail_link_map.items():
+                        if offer_name and offer_name.lower() in link_title.lower():
+                            item["_detail_url"] = link_url
+                            break
 
-        # Pair offers with detail URLs by index
-        for i, offer in enumerate(offers):
-            if i < len(detail_urls):
-                offer["_detail_url"] = detail_urls[i]
+                    # Extract stable property ID from image URL
+                    # e.g. https://media.casasapo.pt/.../P28841017/Tphoto/...
+                    image_url = item.get("image", "")
+                    pid_match = re.search(r'/P(\d+)/', image_url)
+                    if pid_match:
+                        item["_property_id"] = pid_match.group(1)
+
+                    offers.append(item)
 
         return offers
 
@@ -116,15 +128,13 @@ class CasaSapoAdapter(BaseAdapter):
         try:
             title = raw.get("name", "Lisbon Apartment")
 
-            # Extract listing ID from detail URL or generate stable one from title+price
-            detail_url = raw.get("_detail_url", "")
-            # Use a hash of the URL for a stable ID
-            if detail_url:
-                listing_id = str(abs(hash(detail_url)))[-10:]
-            else:
+            # Use property ID from image URL for stable IDs across runs
+            listing_id = raw.get("_property_id")
+            if not listing_id:
                 listing_id = str(abs(hash(title)))[-10:]
 
-            url = detail_url or self.BASE_URL
+            # Detail URL: matched link, or fall back to CASA SAPO homepage
+            url = raw.get("_detail_url") or self.BASE_URL
 
             # Parse price: ["3.000 €"] → 3000
             price_eur = 0.0

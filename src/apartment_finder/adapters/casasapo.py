@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import requests
 from bs4 import BeautifulSoup
 
 from ..models.apartment import Amenities, Apartment
@@ -25,6 +26,7 @@ class CasaSapoAdapter(BaseAdapter):
     Adapter for CASA SAPO (casa.sapo.pt) — Portugal's property portal.
 
     Parses JSON-LD Offer objects embedded in page HTML.
+    Uses plain requests (no headless browser needed).
     """
 
     BASE_URL = "https://casa.sapo.pt"
@@ -32,49 +34,38 @@ class CasaSapoAdapter(BaseAdapter):
     def __init__(self, config: Dict[str, Any], city_config: Dict[str, Any]):
         super().__init__(config, city_config)
         self.city_name = city_config.get("display_name", "Lisbon")
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
 
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
         """Fetch apartment listings from CASA SAPO."""
-        try:
-            from camoufox.sync_api import Camoufox
-        except ImportError:
-            logger.error("Camoufox not installed. Run: pip install camoufox && python -m camoufox fetch")
-            return []
-
         apartments = []
 
-        try:
-            with Camoufox(headless=True) as browser:
-                page = browser.new_page()
+        for pg in range(1, 3):
+            url = f"{self.BASE_URL}/en-gb/rent-apartments/lisboa/"
+            if pg > 1:
+                url += f"?pn={pg}"
 
-                # Scrape first 2 pages
-                for pg in range(1, 3):
-                    url = f"{self.BASE_URL}/en-gb/rent-apartments/lisboa/"
-                    if pg > 1:
-                        url += f"?pn={pg}"
+            try:
+                logger.info(f"Fetching CASA SAPO page {pg} for Lisbon")
+                response = requests.get(url, headers=self._headers, timeout=30)
+                response.raise_for_status()
 
-                    try:
-                        logger.info(f"Fetching CASA SAPO page {pg} for Lisbon")
-                        page.goto(url, timeout=60000)
-                        page.wait_for_timeout(3000)
-                        html = page.content()
+                soup = BeautifulSoup(response.text, "html.parser")
+                page_listings = self._extract_listings(soup)
 
-                        soup = BeautifulSoup(html, "html.parser")
-                        page_listings = self._extract_listings(soup)
+                logger.debug(f"Page {pg}: found {len(page_listings)} listings")
 
-                        logger.debug(f"Page {pg}: found {len(page_listings)} listings")
+                for item in page_listings:
+                    apartment = self._normalize(item, criteria)
+                    if apartment:
+                        apartments.append(apartment)
 
-                        for item in page_listings:
-                            apartment = self._normalize(item, criteria)
-                            if apartment:
-                                apartments.append(apartment)
-
-                    except Exception as e:
-                        logger.error(f"Error fetching CASA SAPO page {pg}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error launching browser for CASA SAPO: {e}")
+            except Exception as e:
+                logger.error(f"Error fetching CASA SAPO page {pg}: {e}")
 
         logger.info(f"Fetched {len(apartments)} listings from CASA SAPO")
         return apartments
@@ -84,10 +75,14 @@ class CasaSapoAdapter(BaseAdapter):
         offers = []
 
         # Collect detail URLs from listing links
+        # CASA SAPO uses SEO-friendly URLs like:
+        #   /en-gb/rent-apartments/apartment/2-bedrooms/refurbished/lisboa/...
+        #   /en-gb/rent-apartments/studio/lisboa/...
         detail_urls = []
         for a in soup.select('a[href*="/en-gb/rent-apartments/"]'):
             href = a.get("href", "")
-            if href and "/detail/" in href.lower() or re.search(r'/\d+/?$', href):
+            # Match individual listing URLs (contain /apartment/ or /studio/ with location info)
+            if re.search(r'/rent-apartments/(?:apartment|studio)/.+/lisboa/', href):
                 full_url = href if href.startswith("http") else self.BASE_URL + href
                 if full_url not in detail_urls:
                     detail_urls.append(full_url)
@@ -121,14 +116,17 @@ class CasaSapoAdapter(BaseAdapter):
         try:
             title = raw.get("name", "Lisbon Apartment")
 
-            # Extract listing ID from detail URL or generate one
+            # Extract listing ID from detail URL or generate stable one from title+price
             detail_url = raw.get("_detail_url", "")
-            id_match = re.search(r'/(\d+)/?$', detail_url)
-            listing_id = id_match.group(1) if id_match else str(abs(hash(title)))[-8:]
+            # Use a hash of the URL for a stable ID
+            if detail_url:
+                listing_id = str(abs(hash(detail_url)))[-10:]
+            else:
+                listing_id = str(abs(hash(title)))[-10:]
 
             url = detail_url or self.BASE_URL
 
-            # Parse price: "3.000 €" → 3000
+            # Parse price: ["3.000 €"] → 3000
             price_eur = 0.0
             price_raw = raw.get("price", [])
             if isinstance(price_raw, list):
@@ -136,8 +134,8 @@ class CasaSapoAdapter(BaseAdapter):
             else:
                 price_text = str(price_raw)
 
-            # Strip dots (thousands separator), spaces, and currency symbol
-            price_cleaned = re.sub(r'[€\s]', '', price_text)
+            # Strip currency symbol and whitespace, handle European number format
+            price_cleaned = re.sub(r'[€EUR\s]', '', price_text)
             price_cleaned = price_cleaned.replace('.', '').replace(',', '.')
             try:
                 price_eur = float(price_cleaned)
@@ -167,15 +165,22 @@ class CasaSapoAdapter(BaseAdapter):
             latitude = geo.get("latitude")
             longitude = geo.get("longitude")
 
-            # Thumbnail
+            # Thumbnail from JSON-LD image field
             thumbnail_url = raw.get("image")
             images = [thumbnail_url] if thumbnail_url else []
 
-            # Extract neighborhood from title (after bedrooms part)
+            # Description from JSON-LD
+            description = raw.get("description")
+
+            # Neighborhood from address or title
             neighborhood = None
-            loc_match = re.search(r'Bedroom[s]?\s+(.+?)(?:,\s*Lisboa)?$', title, re.IGNORECASE)
-            if loc_match:
-                neighborhood = loc_match.group(1).strip()
+            address_data = available_from.get("address", {})
+            if isinstance(address_data, dict):
+                neighborhood = address_data.get("addressRegion")
+            if not neighborhood:
+                loc_match = re.search(r'Bedroom[s]?\s+(.+?)(?:,\s*Lisboa)?$', title, re.IGNORECASE)
+                if loc_match:
+                    neighborhood = loc_match.group(1).strip()
 
             return Apartment(
                 source_id=f"casasapo_{listing_id}",
@@ -192,10 +197,10 @@ class CasaSapoAdapter(BaseAdapter):
                 neighborhood=neighborhood,
                 city=self.city_name,
                 country="Portugal",
-                latitude=latitude,
-                longitude=longitude,
+                latitude=float(latitude) if latitude else None,
+                longitude=float(longitude) if longitude else None,
                 amenities=Amenities(),
-                description=None,
+                description=description,
                 images=images,
                 thumbnail_url=thumbnail_url,
                 posted_date=None,

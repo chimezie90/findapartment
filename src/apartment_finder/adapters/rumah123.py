@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import requests
 from bs4 import BeautifulSoup
 
 from ..models.apartment import Amenities, Apartment
@@ -26,7 +27,7 @@ class Rumah123Adapter(BaseAdapter):
     """
     Adapter for Rumah123.com — Indonesia's largest property portal.
 
-    Uses HTML scraping of listing cards (similar to craigslist/lejebolig adapters).
+    Uses plain HTTP requests to scrape listing cards from static HTML.
     """
 
     BASE_URL = "https://www.rumah123.com"
@@ -35,29 +36,25 @@ class Rumah123Adapter(BaseAdapter):
         super().__init__(config, city_config)
         self.region = city_config.get("rumah123", {}).get("region", "bali")
         self.city_name = city_config.get("display_name", "Bali")
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
 
     @retry_with_backoff(max_retries=3, backoff_factor=2)
     def fetch_listings(self, criteria: SearchCriteria) -> List[Apartment]:
         """Fetch apartment listings from Rumah123."""
-        try:
-            from camoufox.sync_api import Camoufox
-        except ImportError:
-            logger.error("Camoufox not installed. Run: pip install camoufox && python -m camoufox fetch")
-            return []
-
         apartments = []
         url = f"{self.BASE_URL}/en/rent/{self.region}/apartment/"
 
         try:
             logger.info(f"Fetching Rumah123 listings for {self.region}")
 
-            with Camoufox(headless=True) as browser:
-                page = browser.new_page()
-                page.goto(url, timeout=60000)
-                page.wait_for_timeout(3000)
-                html = page.content()
+            response = requests.get(url, headers=self._headers, timeout=30)
+            response.raise_for_status()
 
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
             listings = self._parse_listing_cards(soup)
 
             logger.debug(f"Found {len(listings)} listing cards")
@@ -77,8 +74,8 @@ class Rumah123Adapter(BaseAdapter):
         """Extract listing data from HTML cards."""
         listings = []
 
-        # Rumah123 listing cards are typically in card containers with links
-        cards = soup.select('a[href*="/en/property/"], a[href*="/en/rent/"]')
+        # Rumah123 listing cards contain links to /en/property/...
+        cards = soup.select('a[href*="/en/property/"]')
 
         seen_urls = set()
         for card in cards:
@@ -103,10 +100,10 @@ class Rumah123Adapter(BaseAdapter):
             listing = {"url": full_url, "container": container, "link": card}
             listings.append(listing)
 
-        return listings[:50]  # Limit to 50
+        return listings[:50]
 
     def _parse_price_idr(self, text: str) -> float:
-        """Parse IDR price text like 'IDR 6.5 Million monthly' or 'IDR 1.25 Billion yearly'."""
+        """Parse IDR price text like 'IDR 6,5 Million monthly' or 'IDR 241 Million yearly'."""
         text = text.strip().lower()
 
         # Remove "idr" prefix and "rp" prefix
@@ -115,22 +112,21 @@ class Rumah123Adapter(BaseAdapter):
         # Extract the numeric part and multiplier
         match = re.search(r'([\d.,]+)\s*(million|billion|juta|miliar)?', text, re.IGNORECASE)
         if not match:
-            # Try plain number
             nums = re.findall(r'[\d.,]+', text)
             if nums:
-                return float(nums[0].replace(',', '').replace('.', ''))
+                return float(nums[0].replace(',', '.').replace('..', '.'))
             return 0.0
 
-        num_str = match.group(1).replace(',', '')
-        # Handle Indonesian decimal format (dot as thousands, comma as decimal)
-        # If there's exactly one dot and it's not at thousands position, treat as decimal
-        if '.' in num_str:
+        num_str = match.group(1)
+        # Indonesian/European format: comma as decimal separator
+        # e.g., "6,5" = 6.5, "17,2" = 17.2
+        if ',' in num_str and '.' not in num_str:
+            num_str = num_str.replace(',', '.')
+        elif '.' in num_str:
             parts = num_str.split('.')
             if len(parts) == 2 and len(parts[1]) <= 2:
-                # Looks like a decimal (e.g., 6.5)
-                pass
+                pass  # Already decimal
             else:
-                # Looks like thousands separator (e.g., 1.250.000)
                 num_str = num_str.replace('.', '')
 
         value = float(num_str)
@@ -163,7 +159,7 @@ class Rumah123Adapter(BaseAdapter):
             # Get all text from the container
             container_text = container.get_text(separator=" ", strip=True) if container else ""
 
-            # Title: from the link text or first heading in container
+            # Title: from first heading in container or link text
             title = ""
             heading = container.select_one("h2, h3, h4") if container else None
             if heading:
@@ -173,19 +169,14 @@ class Rumah123Adapter(BaseAdapter):
             if not title:
                 title = "Bali Apartment"
 
-            # Price
+            # Price: look for "IDR X Million monthly" pattern in container text
             price_idr = 0.0
-            price_elem = container.select_one('[class*="price"], [class*="Price"]') if container else None
-            if price_elem:
-                price_idr = self._parse_price_idr(price_elem.get_text())
-            elif container_text:
-                # Try to find price pattern in text
-                price_match = re.search(
-                    r'(?:IDR|Rp\.?)\s*([\d.,]+)\s*(Million|Billion|Juta|Miliar)?\s*(?:/\s*)?(monthly|yearly|month|year|tahun|bulan)?',
-                    container_text, re.IGNORECASE
-                )
-                if price_match:
-                    price_idr = self._parse_price_idr(price_match.group(0))
+            price_match = re.search(
+                r'(?:IDR|Rp\.?)\s*([\d.,]+)\s*(Million|Billion|Juta|Miliar)?\s*(?:/\s*)?(monthly|yearly|month|year|tahun|bulan)?',
+                container_text, re.IGNORECASE
+            )
+            if price_match:
+                price_idr = self._parse_price_idr(price_match.group(0))
 
             # Apply price filter
             if criteria:
@@ -227,6 +218,7 @@ class Rumah123Adapter(BaseAdapter):
             thumbnail_url = None
             images = []
             if container:
+                # Prefer 720x420 crop images
                 img = container.select_one('img[src*="rumah123"], img[src*="r123"]')
                 if img:
                     thumbnail_url = img.get("src") or img.get("data-src")

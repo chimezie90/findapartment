@@ -1,5 +1,6 @@
 """Craigslist adapter for NYC apartment listings."""
 
+import json
 import logging
 import re
 import time
@@ -85,6 +86,9 @@ class CraigslistAdapter(BaseAdapter):
         soup = BeautifulSoup(response.text, "html.parser")
         apartments = []
 
+        # Parse JSON-LD for coordinates (indexed by position matching HTML listing order)
+        jsonld_coords = self._parse_jsonld_coords(soup)
+
         # Find listing items - Craigslist uses different structures
         # Try the gallery view first
         listings = soup.select("li.cl-static-search-result, li.cl-search-result, div.cl-search-result")
@@ -99,18 +103,41 @@ class CraigslistAdapter(BaseAdapter):
 
         logger.debug(f"Found {len(listings)} raw listings on page")
 
-        for listing in listings[:50]:
-            apartment = self._parse_listing(listing, base_url)
+        for idx, listing in enumerate(listings[:50]):
+            apartment = self._parse_listing(listing, base_url, jsonld_coords.get(idx))
             if apartment:
                 apartments.append(apartment)
 
         return apartments
 
-    def _fetch_coordinates(self, url: str) -> Tuple[Optional[float], Optional[float]]:
-        """Fetch coordinates from a listing's detail page.
+    def _parse_jsonld_coords(self, soup) -> Dict[int, Tuple[float, float]]:
+        """Extract lat/lng from JSON-LD structured data on the search page.
 
-        Looks for map data attributes or geo meta tags.
-        Returns (latitude, longitude) or (None, None) on failure.
+        Returns dict mapping position index to (latitude, longitude).
+        """
+        coords = {}
+        script = soup.find("script", id="ld_searchpage_results")
+        if not script or not script.string:
+            return coords
+
+        try:
+            data = json.loads(script.string)
+            for item in data.get("itemListElement", []):
+                pos = int(item.get("position", -1))
+                apt_data = item.get("item", {})
+                lat = apt_data.get("latitude")
+                lng = apt_data.get("longitude")
+                if lat is not None and lng is not None:
+                    coords[pos] = (float(lat), float(lng))
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.debug(f"Failed to parse JSON-LD coordinates: {e}")
+
+        return coords
+
+    def _fetch_detail_page(self, url: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        """Fetch detail page for coordinates and thumbnail image.
+
+        Returns (latitude, longitude, thumbnail_url).
         """
         try:
             time.sleep(self.DETAIL_DELAY)
@@ -118,34 +145,62 @@ class CraigslistAdapter(BaseAdapter):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
 
+            # --- Coordinates ---
+            lat, lng = None, None
+
             # Primary: <div id="map" data-latitude="..." data-longitude="...">
             map_div = soup.find("div", id="map")
             if map_div:
-                lat = map_div.get("data-latitude")
-                lng = map_div.get("data-longitude")
-                if lat and lng:
-                    return float(lat), float(lng)
+                lat_str = map_div.get("data-latitude")
+                lng_str = map_div.get("data-longitude")
+                if lat_str and lng_str:
+                    lat, lng = float(lat_str), float(lng_str)
 
             # Fallback: <meta name="geo.position" content="lat;lng">
-            geo_meta = soup.find("meta", attrs={"name": "geo.position"})
-            if geo_meta:
-                content = geo_meta.get("content", "")
-                parts = content.split(";")
-                if len(parts) == 2:
-                    return float(parts[0].strip()), float(parts[1].strip())
+            if lat is None:
+                geo_meta = soup.find("meta", attrs={"name": "geo.position"})
+                if geo_meta:
+                    content = geo_meta.get("content", "")
+                    parts = content.split(";")
+                    if len(parts) == 2:
+                        lat, lng = float(parts[0].strip()), float(parts[1].strip())
+
+            # --- Thumbnail ---
+            thumbnail_url = None
+            # Find first full-size image from Craigslist CDN
+            for img in soup.select("img[src*='images.craigslist.org']"):
+                src = img.get("src", "")
+                if "600x450" in src or "1200x900" in src:
+                    thumbnail_url = src
+                    break
+
+            # Fallback: any craigslist image
+            if not thumbnail_url:
+                img_urls = re.findall(
+                    r'https://images\.craigslist\.org/[^\s"\'<>]+\.jpg',
+                    response.text,
+                )
+                for img_url in img_urls:
+                    if "50x50c" not in img_url:
+                        thumbnail_url = img_url
+                        break
+
+            return lat, lng, thumbnail_url
 
         except Exception as e:
-            logger.debug(f"Failed to fetch coordinates from {url}: {e}")
+            logger.debug(f"Failed to fetch detail page {url}: {e}")
 
-        return None, None
+        return None, None, None
 
-    def _parse_listing(self, listing, base_url: str) -> Optional[Apartment]:
+    def _parse_listing(self, listing, base_url: str, jsonld_coords: Optional[Tuple[float, float]] = None) -> Optional[Apartment]:
         """Parse a single listing element."""
         try:
             # Try to find the link and title
             link = listing.select_one("a.cl-app-anchor, a.titlestring, a.result-title, a[href*='/apa/']")
             if not link:
-                # Try data attribute
+                # Current structure: the whole li wraps an <a>
+                link = listing.select_one("a")
+            if not link:
                 href = listing.get("data-url")
                 title = listing.get("title") or "Untitled"
             else:
@@ -193,7 +248,7 @@ class CraigslistAdapter(BaseAdapter):
 
             # Extract neighborhood
             neighborhood = None
-            hood_elem = listing.select_one(".result-hood, .meta .nearby, .location")
+            hood_elem = listing.select_one(".location, .result-hood, .meta .nearby")
             if hood_elem:
                 neighborhood = hood_elem.get_text(strip=True).strip("()")
 
@@ -201,22 +256,18 @@ class CraigslistAdapter(BaseAdapter):
             id_match = re.search(r"/(\d+)\.html", url)
             listing_id = id_match.group(1) if id_match else url
 
-            # Fetch coordinates from detail page
-            latitude, longitude = self._fetch_coordinates(url)
+            # Use JSON-LD coordinates if available (from search page, no extra request)
+            latitude, longitude, thumbnail_url = None, None, None
+            if jsonld_coords:
+                latitude, longitude = jsonld_coords
 
-            # Extract thumbnail image URL
-            thumbnail_url = None
-            img_elem = listing.select_one("img, div.gallery img, .swipe img")
-            if img_elem:
-                thumbnail_url = img_elem.get("src") or img_elem.get("data-src")
-            # Also check for background image in gallery
-            if not thumbnail_url:
-                gallery = listing.select_one(".gallery, .swipe, [data-imgcount]")
-                if gallery:
-                    style = gallery.get("style", "")
-                    bg_match = re.search(r'url\(["\']?([^"\')\s]+)', style)
-                    if bg_match:
-                        thumbnail_url = bg_match.group(1)
+            # Fetch detail page for thumbnail (and coords if JSON-LD didn't have them)
+            detail_lat, detail_lng, detail_thumb = self._fetch_detail_page(url)
+
+            if latitude is None and detail_lat is not None:
+                latitude, longitude = detail_lat, detail_lng
+            if detail_thumb:
+                thumbnail_url = detail_thumb
 
             return Apartment(
                 source_id=f"craigslist_{listing_id}",

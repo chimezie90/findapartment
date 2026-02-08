@@ -60,8 +60,8 @@ class DeduplicationService:
                         """
                         INSERT INTO seen_listings
                         (source_id, source_name, city, title, price_usd, url,
-                         thumbnail_url, description, latitude, longitude)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         thumbnail_url, description, latitude, longitude, neighborhood)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             apt.source_id,
@@ -74,6 +74,7 @@ class DeduplicationService:
                             apt.description,
                             apt.latitude,
                             apt.longitude,
+                            apt.neighborhood,
                         ),
                     )
                     new_apartments.append(apt)
@@ -86,10 +87,11 @@ class DeduplicationService:
                                thumbnail_url = COALESCE(thumbnail_url, %s),
                                description = COALESCE(description, %s),
                                latitude = COALESCE(latitude, %s),
-                               longitude = COALESCE(longitude, %s)
+                               longitude = COALESCE(longitude, %s),
+                               neighborhood = COALESCE(neighborhood, %s)
                            WHERE source_id = %s""",
                         (datetime.utcnow(), apt.thumbnail_url, apt.description,
-                         apt.latitude, apt.longitude, apt.source_id),
+                         apt.latitude, apt.longitude, apt.neighborhood, apt.source_id),
                     )
                     new_apartments.append(apt)
 
@@ -101,10 +103,11 @@ class DeduplicationService:
                                thumbnail_url = COALESCE(thumbnail_url, %s),
                                description = COALESCE(description, %s),
                                latitude = COALESCE(latitude, %s),
-                               longitude = COALESCE(longitude, %s)
+                               longitude = COALESCE(longitude, %s),
+                               neighborhood = COALESCE(neighborhood, %s)
                            WHERE source_id = %s""",
                         (datetime.utcnow(), apt.thumbnail_url, apt.description,
-                         apt.latitude, apt.longitude, apt.source_id),
+                         apt.latitude, apt.longitude, apt.neighborhood, apt.source_id),
                     )
 
         logger.info(f"Filtered {len(apartments)} listings to {len(new_apartments)} new ones")

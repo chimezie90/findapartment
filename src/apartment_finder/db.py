@@ -59,8 +59,14 @@ def init_db():
                 latitude REAL,
                 longitude REAL,
                 thumbnail_url TEXT,
-                description TEXT
+                description TEXT,
+                neighborhood TEXT
             )
+        """)
+
+        # Add neighborhood column if missing (migration for existing DBs)
+        cur.execute("""
+            ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS neighborhood TEXT
         """)
 
         cur.execute("""

@@ -1001,6 +1001,87 @@ def api_stats():
     })
 
 
+@app.route('/api/backfill-thumbnails', methods=['POST'])
+def api_backfill_thumbnails():
+    """Bulk backfill thumbnails for listings that are missing them.
+
+    Scrapes each listing's detail page to extract a thumbnail URL,
+    then saves it to the DB. Returns counts of updated/failed/skipped.
+    """
+    import requests as req
+    from bs4 import BeautifulSoup
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT source_id, source_name, url
+                FROM seen_listings
+                WHERE thumbnail_url IS NULL AND url IS NOT NULL AND url != '#'
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if not rows:
+        return jsonify({'message': 'All listings already have thumbnails', 'updated': 0})
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    updated = 0
+    failed = 0
+
+    for row in rows:
+        source_id = row['source_id']
+        url = row['url']
+        thumbnail = None
+
+        try:
+            resp = req.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+
+            # Craigslist: find images from response text
+            if 'craigslist' in (row.get('source_name') or '') or 'craigslist.org' in url:
+                img_urls = re.findall(
+                    r'https://images\.craigslist\.org/[^\s"\'<>]+\.jpg',
+                    resp.text,
+                )
+                for img_url in img_urls:
+                    if '50x50c' not in img_url:
+                        thumbnail = img_url
+                        break
+            else:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                og_img = soup.select_one('meta[property="og:image"]')
+                if og_img and og_img.get('content'):
+                    thumbnail = og_img['content']
+
+            if thumbnail:
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE seen_listings SET thumbnail_url = %s WHERE source_id = %s",
+                        (thumbnail, source_id),
+                    )
+                updated += 1
+
+            time.sleep(0.5)  # Rate limit
+
+        except Exception as e:
+            failed += 1
+            print(f"Backfill failed for {source_id}: {e}")
+
+    return jsonify({
+        'total': len(rows),
+        'updated': updated,
+        'failed': failed,
+        'skipped': len(rows) - updated - failed,
+    })
+
+
 @app.route('/api/fetch', methods=['POST'])
 def api_fetch():
     """Trigger a fetch of new listings."""

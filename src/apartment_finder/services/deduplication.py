@@ -59,8 +59,9 @@ class DeduplicationService:
                     cur.execute(
                         """
                         INSERT INTO seen_listings
-                        (source_id, source_name, city, title, price_usd, url)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        (source_id, source_name, city, title, price_usd, url,
+                         thumbnail_url, description, latitude, longitude)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             apt.source_id,
@@ -69,6 +70,10 @@ class DeduplicationService:
                             apt.title,
                             apt.price_usd,
                             apt.url,
+                            apt.thumbnail_url,
+                            apt.description,
+                            apt.latitude,
+                            apt.longitude,
                         ),
                     )
                     new_apartments.append(apt)
@@ -76,16 +81,30 @@ class DeduplicationService:
                 elif not row["sent_in_email"]:
                     # Seen before but never emailed - include again
                     cur.execute(
-                        "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
-                        (datetime.utcnow(), apt.source_id),
+                        """UPDATE seen_listings
+                           SET last_seen_at = %s,
+                               thumbnail_url = COALESCE(thumbnail_url, %s),
+                               description = COALESCE(description, %s),
+                               latitude = COALESCE(latitude, %s),
+                               longitude = COALESCE(longitude, %s)
+                           WHERE source_id = %s""",
+                        (datetime.utcnow(), apt.thumbnail_url, apt.description,
+                         apt.latitude, apt.longitude, apt.source_id),
                     )
                     new_apartments.append(apt)
 
                 else:
-                    # Already sent - just update last_seen
+                    # Already sent - just update last_seen and backfill missing data
                     cur.execute(
-                        "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
-                        (datetime.utcnow(), apt.source_id),
+                        """UPDATE seen_listings
+                           SET last_seen_at = %s,
+                               thumbnail_url = COALESCE(thumbnail_url, %s),
+                               description = COALESCE(description, %s),
+                               latitude = COALESCE(latitude, %s),
+                               longitude = COALESCE(longitude, %s)
+                           WHERE source_id = %s""",
+                        (datetime.utcnow(), apt.thumbnail_url, apt.description,
+                         apt.latitude, apt.longitude, apt.source_id),
                     )
 
         logger.info(f"Filtered {len(apartments)} listings to {len(new_apartments)} new ones")

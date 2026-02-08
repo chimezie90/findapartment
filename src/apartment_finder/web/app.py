@@ -87,7 +87,8 @@ def get_listings():
                     sent_in_email,
                     latitude,
                     longitude,
-                    thumbnail_url
+                    thumbnail_url,
+                    description
                 FROM seen_listings
                 ORDER BY first_seen_at DESC
             """)

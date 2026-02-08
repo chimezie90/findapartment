@@ -338,6 +338,18 @@ def api_listing_images(source_id):
                     if src not in images:
                         images.append(src)
 
+        # Backfill thumbnail if listing doesn't have one
+        if images and not listing.get('thumbnail_url'):
+            try:
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE seen_listings SET thumbnail_url = %s WHERE source_id = %s AND thumbnail_url IS NULL",
+                        (images[0], source_id),
+                    )
+            except Exception as e:
+                print(f"Error backfilling thumbnail: {e}")
+
         return jsonify({'images': images[:20]})  # Limit to 20 images
 
     except requests.RequestException as e:
@@ -799,13 +811,16 @@ def compute_score(listing, features, preferences):
 
 
 def scrape_description(listing):
-    """Scrape description from the original listing URL."""
+    """Scrape description and thumbnail from the original listing URL.
+
+    Returns (description, thumbnail_url) tuple.
+    """
     import requests
     from bs4 import BeautifulSoup
 
     url = listing.get('url')
     if not url or url == '#':
-        return None
+        return None, None
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -816,11 +831,12 @@ def scrape_description(listing):
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
     except Exception:
-        return None
+        return None, None
 
     soup = BeautifulSoup(response.text, 'html.parser')
     source = (listing.get('source_name') or '').lower()
     description = None
+    thumbnail_url = None
 
     # Craigslist
     if 'craigslist' in source or 'craigslist.org' in url:
@@ -830,6 +846,16 @@ def scrape_description(listing):
             for tag in body.select('.print-qrcode-container, .print-information'):
                 tag.decompose()
             description = body.get_text(separator='\n').strip()
+
+        # Extract thumbnail from detail page images
+        img_urls = re.findall(
+            r'https://images\.craigslist\.org/[^\s"\'<>]+\.jpg',
+            response.text,
+        )
+        for img_url in img_urls:
+            if '50x50c' not in img_url:
+                thumbnail_url = img_url
+                break
 
     # Lejebolig
     elif 'lejebolig' in source or 'lejebolig' in url:
@@ -856,7 +882,7 @@ def scrape_description(listing):
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-    # Generic fallback
+    # Generic fallback for description
     if not description:
         # Try meta description
         meta = soup.select_one('meta[name="description"]')
@@ -870,7 +896,13 @@ def scrape_description(listing):
                     description = text
                     break
 
-    return description
+    # Generic fallback for thumbnail
+    if not thumbnail_url:
+        og_img = soup.select_one('meta[property="og:image"]')
+        if og_img and og_img.get('content'):
+            thumbnail_url = og_img['content']
+
+    return description, thumbnail_url
 
 
 ##############################################################################
@@ -886,19 +918,22 @@ def api_listing_description(source_id):
 
     description = listing.get('description')
 
-    # If not cached, scrape and store
+    # If not cached, scrape and store (also grabs thumbnail)
     if not description:
-        description = scrape_description(listing)
-        if description:
+        description, thumbnail_url = scrape_description(listing)
+        if description or thumbnail_url:
             try:
                 with get_connection() as conn:
                     cur = conn.cursor()
                     cur.execute(
-                        "UPDATE seen_listings SET description = %s WHERE source_id = %s",
-                        (description, source_id),
+                        """UPDATE seen_listings
+                           SET description = COALESCE(description, %s),
+                               thumbnail_url = COALESCE(thumbnail_url, %s)
+                           WHERE source_id = %s""",
+                        (description, thumbnail_url, source_id),
                     )
             except Exception as e:
-                print(f"Error saving description: {e}")
+                print(f"Error saving description/thumbnail: {e}")
 
     features = extract_features(listing.get('title', ''), description)
     return jsonify({'description': description or '', 'features': features})

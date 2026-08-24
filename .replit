@@ -24,62 +24,62 @@ expertMode = true
 [[scheduled]]
 name = "fetch-nyc-morning"
 cron = "0 8 * * *"
-command = "python -m apartment_finder.main --city nyc --source craigslist"
+command = "python -m apartment_finder.main --city nyc"
 
 [[scheduled]]
 name = "fetch-nyc-evening"
 cron = "0 20 * * *"
-command = "python -m apartment_finder.main --city nyc --source craigslist"
+command = "python -m apartment_finder.main --city nyc"
 
 [[scheduled]]
 name = "fetch-la-morning"
 cron = "5 8 * * *"
-command = "python -m apartment_finder.main --city la --source craigslist"
+command = "python -m apartment_finder.main --city la"
 
 [[scheduled]]
 name = "fetch-la-evening"
 cron = "5 20 * * *"
-command = "python -m apartment_finder.main --city la --source craigslist"
+command = "python -m apartment_finder.main --city la"
 
 [[scheduled]]
 name = "fetch-dubai-morning"
 cron = "10 8 * * *"
-command = "python -m apartment_finder.main --city dubai --source propertyfinder"
+command = "python -m apartment_finder.main --city dubai"
 
 [[scheduled]]
 name = "fetch-dubai-evening"
 cron = "10 20 * * *"
-command = "python -m apartment_finder.main --city dubai --source propertyfinder"
+command = "python -m apartment_finder.main --city dubai"
 
 [[scheduled]]
 name = "fetch-copenhagen-morning"
 cron = "15 8 * * *"
-command = "python -m apartment_finder.main --city copenhagen --source lejebolig"
+command = "python -m apartment_finder.main --city copenhagen"
 
 [[scheduled]]
 name = "fetch-copenhagen-evening"
 cron = "15 20 * * *"
-command = "python -m apartment_finder.main --city copenhagen --source lejebolig"
+command = "python -m apartment_finder.main --city copenhagen"
 
 [[scheduled]]
 name = "fetch-lisbon-morning"
 cron = "20 8 * * *"
-command = "python -m apartment_finder.main --city lisbon --source casasapo"
+command = "python -m apartment_finder.main --city lisbon"
 
 [[scheduled]]
 name = "fetch-lisbon-evening"
 cron = "20 20 * * *"
-command = "python -m apartment_finder.main --city lisbon --source casasapo"
+command = "python -m apartment_finder.main --city lisbon"
 
 [[scheduled]]
 name = "fetch-bali-morning"
 cron = "25 8 * * *"
-command = "python -m apartment_finder.main --city bali --source rumah123"
+command = "python -m apartment_finder.main --city bali"
 
 [[scheduled]]
 name = "fetch-bali-evening"
 cron = "25 20 * * *"
-command = "python -m apartment_finder.main --city bali --source rumah123"
+command = "python -m apartment_finder.main --city bali"
 
 [workflows]
 runButton = "Project"

@@ -24,6 +24,12 @@ search:
   preferences:
     - quiet_neighborhood
 
+  # Neighborhoods to always surface first, regardless of score.
+  # Matched case-insensitively against each listing's neighborhood/area.
+  preferred_neighborhoods:
+    - Ørestad
+    - Østerbro
+
 # Cities to search (add/remove as needed)
 cities:
   nyc:
@@ -74,10 +80,20 @@ cities:
     display_name: "Copenhagen"
     currency: DKK
     sources:
+      - balder
       - lejebolig
+      - boligportal
     lejebolig:
       city: koebenhavn
       # Areas: city center, Frederiksberg, Østerbro, Nørrebro, Vesterbro
+    boligportal:
+      city: copenhagen
+    balder:
+      # Balder-owned buildings sit in Ørestad, Østerbro, and Copenhagen
+      # suburbs (Hillerød, Espergærde, Helsingør, Solrød, Hundige).
+      # Leave areas empty to fetch all of them; scoring still boosts
+      # Ørestad/Østerbro via search.preferred_neighborhoods above.
+      areas: []
 
   bali:
     display_name: "Bali"

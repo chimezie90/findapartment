@@ -1,6 +1,6 @@
 run = "python -m apartment_finder.web.app"
 entrypoint = "src/apartment_finder/web/app.py"
-modules = ["python-3.12", "web", "nix", "postgresql-16"]
+modules = ["nix", "nodejs-20", "postgresql-16", "python-3.12", "web"]
 
 [env]
 PYTHONPATH = "${REPL_HOME}/src"

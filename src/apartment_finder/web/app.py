@@ -1084,28 +1084,19 @@ def api_backfill_thumbnails():
 
 @app.route('/api/fetch', methods=['POST'])
 def api_fetch():
-    """Trigger a fetch of new listings."""
+    """Trigger a fetch of new listings across every source configured for the city."""
     data = request.get_json() or {}
     city = data.get('city', 'nyc')
-    source = data.get('source', 'craigslist')
 
-    # Only allow sources that have working scrapers
-    working_scrapers = {
-        'nyc': 'craigslist',
-        'la': 'craigslist',
-        'dubai': 'propertyfinder',
-        'copenhagen': 'lejebolig',
-        'lisbon': 'casasapo',
-        'bali': 'rumah123',
-    }
+    # Cities with at least one working scraper. The actual source list per
+    # city comes from config/config.yaml, not from this endpoint.
+    working_cities = {'nyc', 'la', 'dubai', 'copenhagen', 'lisbon', 'bali'}
 
-    if city not in working_scrapers:
+    if city not in working_cities:
         return jsonify({
             'success': False,
             'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, and Bali have real listings.'
         }), 400
-
-    source = working_scrapers[city]
 
     try:
         _init_app_db()
@@ -1113,12 +1104,14 @@ def api_fetch():
         # Get project root
         project_root = Path(__file__).parent.parent.parent.parent
 
-        # Run the main scraper
+        # Run the main scraper across all sources configured for this city.
+        # Timeout is generous since a city can now sequentially run several
+        # sources (e.g. NYC: craigslist + streeteasy + renthop), not just one.
         result = subprocess.run(
-            [sys.executable, '-m', 'apartment_finder.main', '--city', city, '--source', source],
+            [sys.executable, '-m', 'apartment_finder.main', '--city', city, '--no-email'],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=480,
             cwd=str(project_root),
             env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
         )
@@ -1137,7 +1130,7 @@ def api_fetch():
     except subprocess.TimeoutExpired:
         return jsonify({
             'success': False,
-            'error': 'Fetch timed out after 3 minutes'
+            'error': 'Fetch timed out after 8 minutes'
         }), 504
     except Exception as e:
         return jsonify({

@@ -45,6 +45,7 @@ for _name in [
     "findproperties",
     "boligportal",
     "lejebolig",
+    "balder",
     "propertyfinder",
     "casasapo",
     "rumah123",

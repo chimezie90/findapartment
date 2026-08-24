@@ -70,6 +70,7 @@ class ScoringService:
         must_haves: List[str],
         preferences: List[str],
         weights: Optional[ScoringWeights] = None,
+        preferred_neighborhoods: Optional[List[str]] = None,
     ):
         """
         Initialize scoring service.
@@ -81,14 +82,25 @@ class ScoringService:
             must_haves: List of required amenities
             preferences: List of preference keywords (e.g., 'quiet_neighborhood')
             weights: Custom scoring weights (uses defaults if None)
+            preferred_neighborhoods: Neighborhood names that should always sort
+                above everything else, matched case-insensitively as a
+                substring of the listing's neighborhood/address
         """
         self.min_price = min_price
         self.max_price = max_price
         self.min_sqft = min_sqft
         self.must_haves = [m.lower() for m in must_haves]
         self.preferences = [p.lower() for p in preferences]
+        self.preferred_neighborhoods = [n.lower() for n in (preferred_neighborhoods or [])]
         self.weights = weights or ScoringWeights()
         self.weights.validate()
+
+    def _is_preferred_neighborhood(self, apt: Apartment) -> bool:
+        """Check if an apartment falls in one of the always-surface-first neighborhoods."""
+        if not self.preferred_neighborhoods:
+            return False
+        text = f"{apt.neighborhood or ''} {apt.address or ''}".lower()
+        return any(n in text for n in self.preferred_neighborhoods)
 
     def score_apartments(self, apartments: List[Apartment]) -> List[Apartment]:
         """
@@ -122,8 +134,11 @@ class ScoringService:
             apt.score, apt.score_breakdown = self._calculate_score(apt)
             scored.append(apt)
 
-        # Sort by score descending
-        scored.sort(key=lambda x: x.score or 0, reverse=True)
+        # Sort preferred-neighborhood listings to the top first, then by score
+        scored.sort(
+            key=lambda x: (self._is_preferred_neighborhood(x), x.score or 0),
+            reverse=True,
+        )
         logger.info(f"Scored {len(scored)} apartments (filtered from {len(apartments)})")
         return scored
 
@@ -212,6 +227,9 @@ class ScoringService:
 
     def _score_location(self, apt: Apartment) -> float:
         """Score location based on quiet preference signals."""
+        if self._is_preferred_neighborhood(apt):
+            return 100.0
+
         if "quiet_neighborhood" not in self.preferences:
             return 70.0  # Neutral if not a preference
 

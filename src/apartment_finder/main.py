@@ -43,6 +43,7 @@ class ApartmentFinder:
             must_haves=search.get("must_have", []),
             preferences=search.get("preferences", []),
             weights=ScoringWeights(**weights_config) if weights_config else None,
+            preferred_neighborhoods=search.get("preferred_neighborhoods", []),
         )
 
     def run(self, skip_email: bool = False, only_city: str = None, only_source: str = None) -> Dict[str, List[Apartment]]:

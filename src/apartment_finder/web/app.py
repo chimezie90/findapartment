@@ -284,6 +284,7 @@ def api_listing_images(source_id):
     """Scrape images from the original listing URL."""
     import re
     import requests
+    from urllib.parse import urljoin
     from bs4 import BeautifulSoup
 
     listing = get_listing(source_id)
@@ -308,13 +309,15 @@ def api_listing_images(source_id):
         # Craigslist: look for gallery images
         for img in soup.select('.gallery img, .swipe img, #thumbs a, .slide img'):
             src = img.get('src') or img.get('data-src') or img.get('href')
-            if src and src not in images:
+            if src:
                 # Convert thumbnail URL to full-size URL
                 if '50x50c' in src:
                     src = src.replace('50x50c', '600x450')
                 elif '300x300' in src:
                     src = src.replace('300x300', '600x450')
-                images.append(src)
+                src = urljoin(url, src)
+                if src not in images:
+                    images.append(src)
 
         # Also check for image links in anchors
         for a in soup.select('a[href*="images.craigslist.org"]'):
@@ -335,6 +338,7 @@ def api_listing_images(source_id):
             for img in soup.select('img[src*="http"]'):
                 src = img.get('src')
                 if src and ('jpg' in src or 'jpeg' in src or 'png' in src):
+                    src = urljoin(url, src)
                     if src not in images:
                         images.append(src)
 

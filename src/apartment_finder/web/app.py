@@ -1090,12 +1090,12 @@ def api_fetch():
 
     # Cities with at least one working scraper. The actual source list per
     # city comes from config/config.yaml, not from this endpoint.
-    working_cities = {'nyc', 'la', 'dubai', 'copenhagen', 'lisbon', 'bali'}
+    working_cities = {'nyc', 'la', 'dubai', 'copenhagen', 'lisbon', 'bali', 'sri_lanka'}
 
     if city not in working_cities:
         return jsonify({
             'success': False,
-            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, and Bali have real listings.'
+            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, Bali, and Sri Lanka have real listings.'
         }), 400
 
     try:

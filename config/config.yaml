@@ -95,6 +95,20 @@ cities:
       # Ørestad/Østerbro via search.preferred_neighborhoods above.
       areas: []
 
+  sri_lanka:
+    display_name: "Sri Lanka"
+    currency: LKR
+    # Sri Lankan house rents run far below the global $2,500-4,000 budget
+    # above -- override it here so affordable listings (e.g. Tangalle at
+    # ~$264/mo) actually surface instead of being filtered out.
+    budget:
+      min_usd: 200
+      max_usd: 2000
+    sources:
+      - lankapropertyweb
+    lankapropertyweb:
+      property_type: House
+
   bali:
     display_name: "Bali"
     currency: IDR

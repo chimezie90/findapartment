@@ -102,7 +102,12 @@ class ScoringService:
         text = f"{apt.neighborhood or ''} {apt.address or ''}".lower()
         return any(n in text for n in self.preferred_neighborhoods)
 
-    def score_apartments(self, apartments: List[Apartment]) -> List[Apartment]:
+    def score_apartments(
+        self,
+        apartments: List[Apartment],
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+    ) -> List[Apartment]:
         """
         Score all apartments and sort by score descending.
 
@@ -110,10 +115,16 @@ class ScoringService:
 
         Args:
             apartments: List of apartments to score
+            min_price: Override the instance's min budget (e.g. for a city
+                whose market prices out differently than the global budget)
+            max_price: Override the instance's max budget
 
         Returns:
             Filtered and scored apartments, sorted by score descending
         """
+        min_price = self.min_price if min_price is None else min_price
+        max_price = self.max_price if max_price is None else max_price
+
         scored = []
         for apt in apartments:
             # Skip if missing must-haves
@@ -127,11 +138,11 @@ class ScoringService:
                 continue
 
             # Skip if outside budget
-            if apt.price_usd < self.min_price or apt.price_usd > self.max_price:
+            if apt.price_usd < min_price or apt.price_usd > max_price:
                 logger.debug(f"Skipping {apt.source_id}: outside budget ({apt.price_usd})")
                 continue
 
-            apt.score, apt.score_breakdown = self._calculate_score(apt)
+            apt.score, apt.score_breakdown = self._calculate_score(apt, min_price, max_price)
             scored.append(apt)
 
         # Sort preferred-neighborhood listings to the top first, then by score
@@ -142,12 +153,12 @@ class ScoringService:
         logger.info(f"Scored {len(scored)} apartments (filtered from {len(apartments)})")
         return scored
 
-    def _calculate_score(self, apt: Apartment) -> Tuple[float, dict]:
+    def _calculate_score(self, apt: Apartment, min_price: float, max_price: float) -> Tuple[float, dict]:
         """Calculate weighted score for an apartment."""
         breakdown = {}
 
         # Price score (lower is better, within range)
-        breakdown["price"] = self._score_price(apt.price_usd)
+        breakdown["price"] = self._score_price(apt.price_usd, min_price, max_price)
 
         # Size score (bigger is better)
         breakdown["size"] = self._score_size(apt.sqft)
@@ -172,19 +183,19 @@ class ScoringService:
 
         return round(total, 1), breakdown
 
-    def _score_price(self, price_usd: float) -> float:
+    def _score_price(self, price_usd: float, min_price: float, max_price: float) -> float:
         """
         Score price: 100 for min_price, decreasing as price increases.
         Prices at max_price get 0.
         """
-        if price_usd <= self.min_price:
+        if price_usd <= min_price:
             return 100.0
-        if price_usd >= self.max_price:
+        if price_usd >= max_price:
             return 0.0
 
         # Linear decrease from min to max
-        range_size = self.max_price - self.min_price
-        position = price_usd - self.min_price
+        range_size = max_price - min_price
+        position = price_usd - min_price
         return 100.0 * (1 - position / range_size)
 
     def _score_size(self, sqft: Optional[int]) -> float:

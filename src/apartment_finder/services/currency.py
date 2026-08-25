@@ -29,6 +29,7 @@ class CurrencyService:
         "GBP_USD": 1.26,  # 1 GBP = ~1.26 USD
         "DKK_USD": 0.14,  # 1 DKK = ~0.14 USD
         "IDR_USD": 0.000063,  # 1 IDR = ~0.000063 USD
+        "LKR_USD": 0.00303,  # 1 LKR = ~0.00303 USD (Frankfurter has no LKR data)
     }
 
     def __init__(self):
@@ -117,7 +118,7 @@ class CurrencyService:
     def _refresh_rates(self) -> None:
         """Fetch current rates from Frankfurter API."""
         # Get USD-based rates for common currencies we use
-        currencies = ["AED", "EUR", "GBP", "DKK", "IDR"]
+        currencies = ["AED", "EUR", "GBP", "DKK", "IDR", "LKR"]
 
         response = requests.get(
             f"{self.BASE_URL}/latest",

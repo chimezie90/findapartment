@@ -95,13 +95,15 @@ class ApartmentFinder:
         local_currency = city_config.get("currency", "USD")
         search = self.config["search"]
 
+        # A city can override the global USD budget (e.g. Sri Lanka's market
+        # prices out very differently than Copenhagen's) via city_config.budget
+        city_budget = city_config.get("budget", {})
+        min_usd = city_budget.get("min_usd", search["budget"]["min_usd"])
+        max_usd = city_budget.get("max_usd", search["budget"]["max_usd"])
+
         # Convert USD budget to local currency
-        min_local = self.currency_service.convert_from_usd(
-            search["budget"]["min_usd"], local_currency
-        )
-        max_local = self.currency_service.convert_from_usd(
-            search["budget"]["max_usd"], local_currency
-        )
+        min_local = self.currency_service.convert_from_usd(min_usd, local_currency)
+        max_local = self.currency_service.convert_from_usd(max_usd, local_currency)
 
         criteria = SearchCriteria(
             min_price_local=min_local,
@@ -148,8 +150,8 @@ class ApartmentFinder:
         # Filter out previously seen listings
         new_apartments = self.dedup_service.filter_new_listings(all_apartments)
 
-        # Score and rank
-        scored = self.scoring_service.score_apartments(new_apartments)
+        # Score and rank (using this city's budget, which may override the global one)
+        scored = self.scoring_service.score_apartments(new_apartments, min_price=min_usd, max_price=max_usd)
 
         logger.info(
             f"City {city_key}: {len(all_apartments)} fetched, "

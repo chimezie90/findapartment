@@ -139,15 +139,15 @@ class TestScoringService:
         assert "freshness" in breakdown
 
     def test_score_price_at_minimum(self, scoring_service):
-        score = scoring_service._score_price(2500)
+        score = scoring_service._score_price(2500, scoring_service.min_price, scoring_service.max_price)
         assert score == 100.0
 
     def test_score_price_at_maximum(self, scoring_service):
-        score = scoring_service._score_price(4000)
+        score = scoring_service._score_price(4000, scoring_service.min_price, scoring_service.max_price)
         assert score == 0.0
 
     def test_score_price_midpoint(self, scoring_service):
-        score = scoring_service._score_price(3250)  # Midpoint
+        score = scoring_service._score_price(3250, scoring_service.min_price, scoring_service.max_price)  # Midpoint
         assert 45 < score < 55  # Should be around 50
 
     def test_score_size_at_minimum(self, scoring_service):

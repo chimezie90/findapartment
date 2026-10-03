@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buy a Home</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.5;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+        header { background: #2c3e50; color: white; }
+        header .container { padding-top: 16px; padding-bottom: 16px; }
+        header h1 { font-size: 1.6rem; margin-bottom: 4px; }
+        .stats { font-size: 0.9rem; opacity: 0.9; }
+
+        .site-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+        .site-nav a {
+            color: #cfd8e3; text-decoration: none; font-weight: 600;
+            padding: 6px 12px; border-radius: 16px; font-size: 0.9rem;
+        }
+        .site-nav a.active { background: rgba(255,255,255,0.18); color: #fff; }
+        .site-nav a:hover { color: #fff; }
+
+        .controls, .about {
+            background: white; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+        }
+        .controls summary, .about summary { font-weight: 600; cursor: pointer; padding: 4px 0; }
+        .about { font-size: 0.88rem; }
+        .about ul { margin: 8px 0 8px 20px; }
+        .about li { margin-bottom: 3px; }
+        .about a { color: #2471a3; }
+        .filter-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px; margin-top: 10px;
+        }
+        .control-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .control-group label {
+            font-size: 0.75rem; font-weight: 600; color: #666; text-transform: uppercase;
+        }
+        .control-group select, .control-group input {
+            width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #ddd;
+            border-radius: 5px; font-size: 1rem; background: white;
+        }
+        .control-check { flex-direction: row; align-items: center; gap: 8px; align-self: end; padding-bottom: 8px; }
+        .control-check input { width: auto; }
+        .control-check label { text-transform: none; font-size: 0.9rem; color: #333; }
+
+        .result-count { font-size: 0.9rem; color: #666; margin-bottom: 8px; }
+
+        .homes { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+        .home {
+            display: flex; gap: 12px; background: white; border-radius: 8px; padding: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-width: 0;
+        }
+        .home.inactive { opacity: 0.55; }
+        .home-thumb {
+            flex: 0 0 104px; width: 104px; height: 78px; border-radius: 6px; overflow: hidden;
+            background: #e9ecef; display: flex; align-items: center; justify-content: center;
+            color: #999; font-size: 0.75rem; text-decoration: none;
+        }
+        .home-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .home-body { flex: 1; min-width: 0; }
+        .home-title { font-weight: 600; font-size: 1rem; overflow-wrap: anywhere; }
+        .home-title a { color: inherit; text-decoration: none; }
+        .home-title a:hover { text-decoration: underline; }
+        .home-place, .home-spec, .home-line { font-size: 0.82rem; color: #666; overflow-wrap: anywhere; }
+        .home-spec { color: #444; }
+        .home-price { font-weight: 700; font-size: 1.1rem; color: #27ae60; margin-top: 2px; }
+        .home-price small, .home-line small { font-weight: 400; color: #888; font-size: 0.8rem; }
+        .home-line b { color: #333; }
+        .cheaper { color: #1e8449; font-weight: 600; }
+        .pricier { color: #b03a2e; font-weight: 600; }
+        .est { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; color: #8e6c00;
+               background: #fff6d6; border-radius: 3px; padding: 0 4px; margin-left: 2px; }
+        .breakdown { font-size: 0.8rem; color: #555; margin-top: 4px; }
+        .breakdown summary { cursor: pointer; color: #2471a3; }
+        .breakdown table { border-collapse: collapse; margin-top: 4px; width: 100%; }
+        .breakdown td { padding: 1px 0; vertical-align: top; }
+        .breakdown td:last-child { text-align: right; padding-left: 8px; white-space: nowrap; }
+        .breakdown tr.sum td { border-top: 1px solid #ddd; font-weight: 600; color: #333; }
+        .ext-note { font-size: 0.75rem; color: #7a6a4f; margin-top: 4px; }
+        .tag {
+            display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 6px;
+            border-radius: 4px; margin-right: 4px; vertical-align: middle;
+        }
+        .tag-drop { background: #e3f4ea; color: #1e7a46; }
+        .tag-ext { background: #f1ece2; color: #6b5a3a; }
+        .tag-offer { background: #fff3e0; color: #b45309; }
+        .tag-gone { background: #fde2e2; color: #a12a2a; }
+
+        .empty-state { text-align: center; padding: 40px 16px; color: #666; background: white; border-radius: 8px; }
+        .empty-state h2 { font-size: 1.2rem; margin-bottom: 6px; color: #333; }
+
+        .load-more {
+            display: block; margin: 16px auto; padding: 10px 24px; font-size: 1rem;
+            border: 1px solid #3498db; background: white; color: #3498db; border-radius: 6px; cursor: pointer;
+        }
+        .load-more[hidden] { display: none; }
+
+        @media (max-width: 480px) {
+            .container { padding: 12px; }
+            header h1 { font-size: 1.3rem; }
+            .homes { grid-template-columns: 1fr; }
+            .filter-grid { grid-template-columns: 1fr 1fr; }
+            .home-thumb { flex-basis: 84px; width: 84px; height: 64px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <nav class="site-nav">
+                <a href="/">Apartments</a>
+                <a href="/cars">Cars</a>
+                <a href="/homes" class="active">Buy a home</a>
+            </nav>
+            <h1>Buy a Home</h1>
+            <div class="stats">Copenhagen area · flats and houses for sale · from home.dk</div>
+        </div>
+    </header>
+
+    <div class="container">
+        <details class="about" id="about">
+            <summary>How the monthly estimate works</summary>
+            <p>Every monthly figure is an <b>estimate</b> for one buyer, for year 1. It assumes:</p>
+            <ul id="assumptionList">
+                <li>5% cash down payment.</li>
+                <li>80% realkredit loan: 30-year fixed, 4% coupon, bond price 95. The debt is 0.80 × price ÷ 0.95.</li>
+                <li>Contribution fee 0.74% a year on that debt.</li>
+                <li>15% bank loan at 3.70%, 30 years.</li>
+                <li>Interest tax deduction of about 33% on the first 50,000 kr. a year of interest and fees, and 25% above.</li>
+                <li>Running costs: the listing's monthly owner expenses (ejerudgift) when known. Otherwise estimated property taxes for a new buyer, based on the price.</li>
+            </ul>
+            <p><b>Cash out</b> is the loan payment after tax plus running costs. <b>Real cost</b> is cash out minus the loan principal you repay, which you keep as equity.</p>
+            <p><b>Cash to buy</b> is 5% down + deed fee (0.6% + 1,850 kr.) + mortgage registration (1.25% of both loans) + about 45,000 kr. of other fees.</p>
+            <p>Price per m² is compared with the municipality's Q2 2026 average (Finans Danmark), where we have one.</p>
+            <p id="rateNote"></p>
+            <p><a href="https://claude.ai/artifact/Dy3xPwdNCLTJWofY5tN4VJ" target="_blank" rel="noopener">Read the research behind these numbers</a></p>
+        </details>
+
+        <details class="controls" id="filters" open>
+            <summary>Filters</summary>
+            <div class="filter-grid">
+                <div class="control-group">
+                    <label for="maxPrice">Max price (kr.)</label>
+                    <input type="number" id="maxPrice" min="0" step="250000" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group">
+                    <label for="type">Type</label>
+                    <select id="type">
+                        <option value="">Any</option>
+                        <option value="flat">Flat</option>
+                        <option value="villa_flat">Villa flat</option>
+                        <option value="terraced">Terraced house</option>
+                        <option value="villa">Villa</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="minSqm">Min m²</label>
+                    <input type="number" id="minSqm" min="0" step="10" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group">
+                    <label for="maxSqm">Max m²</label>
+                    <input type="number" id="maxSqm" min="0" step="10" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group">
+                    <label for="minRooms" title="Known for home.dk's own listings only">Min rooms</label>
+                    <select id="minRooms">
+                        <option value="">Any</option>
+                        <option value="2">2+</option>
+                        <option value="3">3+</option>
+                        <option value="4">4+</option>
+                        <option value="5">5+</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="municipality">Municipality</label>
+                    <select id="municipality"><option value="">Any</option></select>
+                </div>
+                <div class="control-group">
+                    <label for="postcode">Postcode</label>
+                    <input type="text" id="postcode" maxlength="4" inputmode="numeric" pattern="[0-9]{4}" placeholder="e.g. 2100">
+                </div>
+                <div class="control-group">
+                    <label for="maxPpsqm">Max kr. per m²</label>
+                    <input type="number" id="maxPpsqm" min="0" step="5000" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group">
+                    <label for="energy" title="Known for home.dk's own listings only">Energy label</label>
+                    <select id="energy">
+                        <option value="">Any</option>
+                        <option value="A">A</option>
+                        <option value="B">B or better</option>
+                        <option value="C">C or better</option>
+                        <option value="D">D or better</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="addedDays">Added</label>
+                    <select id="addedDays">
+                        <option value="">Any time</option>
+                        <option value="1">Last 24 hours</option>
+                        <option value="3">Last 3 days</option>
+                        <option value="7">Last 7 days</option>
+                        <option value="30">Last 30 days</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="sort">Sort by</label>
+                    <select id="sort">
+                        <option value="newest" selected>Newest first</option>
+                        <option value="price-asc">Price: low to high</option>
+                        <option value="price-desc">Price: high to low</option>
+                        <option value="ppsqm-asc">Price per m²: lowest</option>
+                        <option value="monthly-asc">Est. monthly cost: lowest</option>
+                        <option value="drop-desc">Biggest price drop</option>
+                    </select>
+                </div>
+                <div class="control-group control-check">
+                    <input type="checkbox" id="showUnavailable">
+                    <label for="showUnavailable">Show unavailable</label>
+                </div>
+            </div>
+        </details>
+
+        <div class="result-count" id="resultCount"></div>
+        <div class="homes" id="homes"></div>
+        <button type="button" class="load-more" id="loadMore" hidden>Load more</button>
+    </div>
+
+    <script>
+        const PAGE_SIZE = 40;
+        const SQFT_PER_SQM = 10.7639;
+        const state = { offset: 0, total: 0, requestId: 0, usd: null };
+        const $ = (id) => document.getElementById(id);
+        const homesEl = $('homes');
+
+        // Desktop: filters open. Phones: start collapsed to show homes first.
+        if (window.matchMedia('(max-width: 480px)').matches) $('filters').open = false;
+
+        function escapeHtml(text) {
+            return String(text == null ? '' : text)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Only http(s) links reach an href
+        function safeUrl(url) {
+            return /^https?:\/\//i.test(url || '') ? url : '#';
+        }
+
+        const dkkFmt = new Intl.NumberFormat('da-DK', { maximumFractionDigits: 0 });
+        const usdFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+        const kr = (n) => n == null ? '' : dkkFmt.format(Math.round(n)) + ' kr.';
+        const usd = (n) => n == null || state.usd == null ? '' : '$' + usdFmt.format(Math.round(n * state.usd));
+        // "4.795.000 kr. ($749,000)"
+        const money = (n) => n == null ? '' : `${kr(n)} <small>(${usd(n)})</small>`;
+
+        function timeAgo(iso) {
+            if (!iso) return '';
+            const days = Math.floor(Math.max(0, Date.now() - new Date(iso).getTime()) / 86400000);
+            if (days === 0) return 'added today';
+            return days === 1 ? 'added 1 day ago' : `added ${days} days ago`;
+        }
+
+        const TYPE_LABELS = { flat: 'Flat', villa_flat: 'Villa flat', terraced: 'Terraced house', villa: 'Villa' };
+
+        function buildQuery() {
+            const params = new URLSearchParams({ limit: PAGE_SIZE, offset: state.offset });
+            const fields = { max_price: 'maxPrice', type: 'type', min_sqm: 'minSqm', max_sqm: 'maxSqm',
+                             min_rooms: 'minRooms', municipality: 'municipality', max_ppsqm: 'maxPpsqm',
+                             energy: 'energy', added_days: 'addedDays', sort: 'sort' };
+            for (const [param, id] of Object.entries(fields)) {
+                const value = $(id).value.trim();
+                if (value) params.set(param, value);
+            }
+            const postcode = $('postcode').value.trim();
+            if (/^\d{4}$/.test(postcode)) params.set('postcode', postcode);
+            if ($('showUnavailable').checked) params.set('show_unavailable', '1');
+            return params.toString();
+        }
+
+        function sizeText(home) {
+            return home.sqm ? `${home.sqm} m² (${usdFmt.format(home.sqft)} sq ft)` : null;
+        }
+
+        function ppsqmLine(home) {
+            if (!home.price_per_sqm) return '';
+            const perSqft = state.usd != null ? '$' + usdFmt.format(home.price_per_sqm * state.usd / SQFT_PER_SQM) + '/sq ft' : '';
+            let vs = '';
+            if (home.vs_municipality_pct != null) {
+                const pct = home.vs_municipality_pct;
+                const cls = pct <= 0 ? 'cheaper' : 'pricier';
+                const word = pct <= 0 ? 'below' : 'above';
+                vs = ` · <span class="${cls}" title="Q2 2026 average: ${escapeHtml(kr(home.municipality_avg_per_sqm))}/m²">${Math.abs(pct).toFixed(0)}% ${word} ${escapeHtml(home.municipality)} avg</span>`;
+            }
+            return `<div class="home-line">${kr(home.price_per_sqm)}/m² <small>(${perSqft})</small>${vs}</div>`;
+        }
+
+        function costBlock(home) {
+            const m = home.monthly;
+            const running = m.running_costs_estimated ? 'Property tax (estimated)' : 'Owner expenses (ejerudgift)';
+            return `<div class="home-line"><b>≈ ${kr(m.cash_out)}/mo</b> <small>(${usd(m.cash_out)})</small> cash out
+                    <span class="est">estimate</span></div>
+                <div class="home-line">Real cost ≈ ${kr(m.real_cost)}/mo <small>(${usd(m.real_cost)})</small> · cash to buy ≈ ${kr(home.cash_needed)} <small>(${usd(home.cash_needed)})</small></div>
+                <details class="breakdown"><summary>Cost breakdown</summary>
+                    <table>
+                        <tr><td>Loan payments before tax</td><td>${kr(m.gross_loan_payment)}</td></tr>
+                        <tr><td>Interest tax deduction</td><td>− ${kr(m.tax_deduction)}</td></tr>
+                        <tr><td>Loan payments after tax</td><td>${kr(m.net_loan_payment)}</td></tr>
+                        <tr><td>${running}</td><td>+ ${kr(m.running_costs)}</td></tr>
+                        <tr class="sum"><td>Cash out per month</td><td>${kr(m.cash_out)}</td></tr>
+                        <tr><td>Principal repaid (your equity)</td><td>− ${kr(m.principal)}</td></tr>
+                        <tr class="sum"><td>Real cost per month</td><td>${kr(m.real_cost)}</td></tr>
+                    </table>
+                </details>`;
+        }
+
+        function renderHome(home) {
+            const url = escapeHtml(safeUrl(home.url));
+            const title = home.street || home.address;
+            const place = [[home.postcode, home.city].filter(Boolean).join(' '), home.municipality]
+                .filter(Boolean).join(' · ');
+            const spec = [
+                TYPE_LABELS[home.property_type] || home.property_type,
+                sizeText(home),
+                home.rooms ? home.rooms + (home.rooms === 1 ? ' room' : ' rooms') : null,
+                home.year_built ? 'built ' + home.year_built : null,
+                home.energy_label ? 'energy ' + home.energy_label : null,
+            ].filter(Boolean).join(' · ');
+            const tags = (home.price_dropped ? `<span class="tag tag-drop" title="Down from ${escapeHtml(kr(home.first_price_dkk))} when first seen">Price dropped ${home.price_drop_pct}%</span>` : '')
+                       + (home.under_offer ? '<span class="tag tag-offer" title="Solgt med forbehold: an offer is accepted, subject to conditions">Under offer</span>' : '')
+                       + (home.is_external ? '<span class="tag tag-ext">Other broker</span>' : '')
+                       + (home.active ? '' : '<span class="tag tag-gone">Unavailable</span>');
+            const was = home.price_dropped ? ` <small>was ${kr(home.first_price_dkk)}</small>` : '';
+            const thumb = home.thumbnail_url
+                ? `<img src="${escapeHtml(safeUrl(home.thumbnail_url))}" alt="" loading="lazy" decoding="async" width="104" height="78" referrerpolicy="no-referrer">`
+                : 'No photo';
+            const ext = home.is_external
+                ? '<div class="ext-note">Listed by another broker. The link opens their listing via boligsiden.dk.</div>' : '';
+            return `<div class="home${home.active ? '' : ' inactive'}">
+                <a class="home-thumb" href="${url}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">${thumb}</a>
+                <div class="home-body">
+                    <div class="home-title">${tags}<a href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a></div>
+                    <div class="home-place">${escapeHtml(place)}${home.added_at ? ' · ' + timeAgo(home.added_at) : ''}</div>
+                    <div class="home-spec">${escapeHtml(spec)}</div>
+                    <div class="home-price">${money(home.price_dkk)}${was}</div>
+                    ${ppsqmLine(home)}
+                    ${costBlock(home)}
+                    ${ext}
+                </div>
+            </div>`;
+        }
+
+        function renderEmpty() {
+            homesEl.innerHTML = `<div class="empty-state"><h2>No homes match these filters</h2>
+                <p>Try a higher max price, a wider size range, or "Any time". Rooms and energy label are only known for home.dk's own listings.</p></div>`;
+        }
+
+        function updateMunicipalities(names) {
+            const select = $('municipality');
+            const current = select.value;
+            const known = new Set(Array.from(select.options).map(o => o.value));
+            for (const name of names) {
+                if (!known.has(name)) select.add(new Option(name, name));
+            }
+            select.value = current;
+        }
+
+        async function loadHomes(append) {
+            if (!append) state.offset = 0;
+            const requestId = ++state.requestId;
+            $('loadMore').hidden = true;
+            if (!append) $('resultCount').textContent = 'Loading…';
+            try {
+                const response = await fetch('/api/homes?' + buildQuery());
+                const data = await response.json();
+                if (requestId !== state.requestId) return; // a newer filter change won
+                if (!response.ok) throw new Error(data.error || 'Request failed');
+                state.usd = data.usd_per_dkk;
+                $('rateNote').textContent = state.usd
+                    ? `USD figures use 1 kr. = $${state.usd.toFixed(4)}.` : '';
+                updateMunicipalities(data.municipalities || []);
+                if (append && !data.homes.length) {
+                    $('loadMore').hidden = true;  // list shrank since the last page
+                    return;
+                }
+                state.total = data.total;
+                const html = data.homes.map(renderHome).join('');
+                if (append) homesEl.insertAdjacentHTML('beforeend', html);
+                else if (data.homes.length) homesEl.innerHTML = html;
+                else renderEmpty();
+                state.offset += data.homes.length;
+                $('resultCount').textContent = state.total
+                    ? `Showing ${state.offset} of ${dkkFmt.format(state.total)} homes` : '';
+                $('loadMore').hidden = state.offset >= state.total;
+            } catch (err) {
+                if (requestId !== state.requestId) return;
+                if (append) {
+                    $('resultCount').textContent = 'Could not load more homes. Try again.';
+                    $('loadMore').hidden = false;
+                    return;
+                }
+                $('resultCount').textContent = '';
+                homesEl.innerHTML = `<div class="empty-state"><h2>Could not load homes</h2><p>${escapeHtml(err.message)}</p></div>`;
+            }
+        }
+
+        let debounceTimer;
+        function onFilterChange(delay) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => loadHomes(false), delay);
+        }
+
+        ['type', 'minRooms', 'municipality', 'energy', 'addedDays', 'sort', 'showUnavailable'].forEach(id =>
+            $(id).addEventListener('change', () => onFilterChange(0)));
+        ['maxPrice', 'minSqm', 'maxSqm', 'maxPpsqm', 'postcode'].forEach(id =>
+            $(id).addEventListener('input', () => onFilterChange(400)));
+        $('loadMore').addEventListener('click', () => loadHomes(true));
+
+        loadHomes(false);
+    </script>
+</body>
+</html>

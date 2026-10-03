@@ -159,6 +159,11 @@ def _parse_card(article, city: str, now: datetime) -> Optional[Car]:
         price = parse_danish_int(price_el.get_text()) if price_el else None
         price_block = price_el.parent.get_text(" ", strip=True).lower() if price_el else ""
         is_monthly = "/md" in price_block or "pr. md" in price_block or "/måned" in price_block
+        # Dealer vans etc. list prices ex. VAT; add Danish 25% moms so they
+        # filter and sort against private sellers' all-in prices.
+        vat_added = price is not None and ("ekskl. moms" in price_block or "ex. moms" in price_block)
+        if vat_added:
+            price = round(price * 1.25)
 
         location = seller_type = None
         info = article.find("div", class_="flex-1")
@@ -193,6 +198,7 @@ def _parse_card(article, city: str, now: datetime) -> Optional[Car]:
             location=location,
             seller_type=seller_type,
             is_promoted="Betalt placering" in article.get_text(" ", strip=True),
+            vat_added=vat_added,
             thumbnail_url=_small_thumbnail(img.get("src") if img else None),
             listed_at=parse_listing_age(age_el.get_text(" ", strip=True), now) if age_el else None,
         )
@@ -219,6 +225,7 @@ class DbaCarAdapter:
         self.location = str(dba_config.get("location", COPENHAGEN_LOCATION))
         self.max_pages = min(int(dba_config.get("max_pages", MAX_PAGES_LIMIT)), MAX_PAGES_LIMIT)
         self.city_name = city_config.get("display_name", "Copenhagen")
+        self.page_errors: List[str] = []  # set by fetch_listings; pipeline treats as failure
 
     def fetch_listings(self) -> List[Car]:
         cars: Dict[str, Car] = {}
@@ -230,6 +237,7 @@ class DbaCarAdapter:
                 response = requests.get(SEARCH_URL, params=params, headers=HEADERS, timeout=30)
             except requests.RequestException as e:
                 logger.error(f"DBA page {page} request failed: {e}")
+                self.page_errors.append(f"page {page}: {e}")
                 break
             # Anything but a full 200 page (403/429, or a 202 with an empty
             # body like Bilbasen's bot wall) means stop -- don't push on.
@@ -238,10 +246,12 @@ class DbaCarAdapter:
                     f"DBA page {page} returned HTTP {response.status_code} "
                     f"({len(response.text)} bytes); stopping"
                 )
+                self.page_errors.append(f"page {page}: HTTP {response.status_code}")
                 break
             page_cars = parse_search_page(response.text, self.city_name)
             if not page_cars:
                 logger.warning(f"DBA page {page} had no parseable listings; stopping")
+                self.page_errors.append(f"page {page}: no parseable listings")
                 break
             for car in page_cars:
                 # Paid placements can repeat across pages

@@ -252,7 +252,9 @@
                           timeAgo(car.added_at)].filter(Boolean).join(' · ');
             const price = car.listing_type === 'lease'
                 ? (car.monthly_price_local != null ? formatNumber(car.monthly_price_local) + ' kr. <small>/ month</small>' : 'Price on request')
-                : (car.price_local != null ? formatNumber(car.price_local) + ' kr.' : 'Price on request');
+                : (car.price_local != null
+                    ? formatNumber(car.price_local) + ' kr.' + (car.vat_added ? ' <small title="Listed ex. VAT; 25% moms added">incl. moms</small>' : '')
+                    : 'Price on request');
             const tags = (car.is_promoted ? '<span class="tag tag-paid" title="Paid placement on the source site">Paid</span>' : '')
                        + (car.active ? '' : '<span class="tag tag-gone">Unavailable</span>');
             const thumb = car.thumbnail_url

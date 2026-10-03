@@ -225,7 +225,7 @@ def get_cars(city='Copenhagen', listing_type='buy', max_price=None, min_year=Non
                 SELECT source_id, source_name, city, listing_type, make, model,
                        variant, year, mileage_km, fuel, gearbox, price_local,
                        currency, price_usd, monthly_price_local, location,
-                       seller_type, is_promoted, url, thumbnail_url, listed_at,
+                       seller_type, is_promoted, vat_added, url, thumbnail_url, listed_at,
                        first_seen_at, last_seen_at, status,
                        COALESCE(listed_at, first_seen_at) AS added_at,
                        (status = 'active'

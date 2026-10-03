@@ -28,6 +28,7 @@ class Car:
     location: Optional[str] = None
     seller_type: Optional[str] = None  # "private" / "dealer"
     is_promoted: bool = False  # Paid placement at the source
+    vat_added: bool = False  # Listed "ekskl. moms"; 25% VAT added so prices compare
     thumbnail_url: Optional[str] = None
     listed_at: Optional[datetime] = None  # Approximate, from the card's "listed X ago"
 

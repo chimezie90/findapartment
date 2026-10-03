@@ -122,6 +122,19 @@ cities:
         - seminyak
         - ubud
 
+# Car listings ("Cars" section of the site). Run with:
+#   python -m apartment_finder.main --cars --city copenhagen --no-email
+# Fetches broadly (no price/type filter); filtering happens in the UI.
+cars:
+  copenhagen:
+    display_name: "Copenhagen"
+    currency: DKK
+    sources:
+      - dba
+    dba:
+      location: "0.200001"  # DBA region "København og omegn"
+      max_pages: 3          # ~50 cars per page, newest first
+
 # Email delivery settings
 email:
   enabled: true

@@ -161,6 +161,139 @@ def api_listings():
     return jsonify(listings)
 
 
+@app.route('/cars')
+def cars_page():
+    """Serve the car listings page."""
+    return send_from_directory('static', 'cars.html')
+
+
+# Car scrapes only cover the newest few pages of a source, so most listings
+# are NOT re-seen on every run. A wider window than ACTIVE_WINDOW_DAYS keeps
+# them showing until a liveness check (404) or this window says otherwise.
+CAR_ACTIVE_WINDOW_DAYS = 14
+CAR_PAGE_SIZE = 60
+CAR_SORTS = {
+    'newest': 'added_at DESC, source_id',
+    'price-asc': 'COALESCE(price_local, monthly_price_local) ASC NULLS LAST, added_at DESC, source_id',
+    'price-desc': 'COALESCE(price_local, monthly_price_local) DESC NULLS LAST, added_at DESC, source_id',
+    'year-desc': 'year DESC NULLS LAST, added_at DESC, source_id',
+    'km-asc': 'mileage_km ASC NULLS LAST, added_at DESC, source_id',
+}
+
+
+def _int_arg(name, minimum=0, maximum=None):
+    """Query-string int, or None if missing/invalid. Clamped to [minimum, maximum]."""
+    try:
+        value = int(request.args.get(name, ''))
+    except ValueError:
+        return None
+    value = max(value, minimum)
+    return min(value, maximum) if maximum is not None else value
+
+
+def get_cars(city='Copenhagen', listing_type='buy', max_price=None, min_year=None,
+             max_km=None, fuel=None, gearbox=None, seller_type=None,
+             added_days=None, show_unavailable=False, sort='newest',
+             limit=CAR_PAGE_SIZE, offset=0):
+    """Filtered, sorted page of car listings plus the total match count."""
+    conditions, params = [], [CAR_ACTIVE_WINDOW_DAYS, city, listing_type]
+    if not show_unavailable:
+        conditions.append('active')
+    if max_price is not None:
+        conditions.append('COALESCE(price_local, monthly_price_local) <= %s')
+        params.append(max_price)
+    if min_year is not None:
+        conditions.append('year >= %s')
+        params.append(min_year)
+    if max_km is not None:
+        conditions.append('mileage_km <= %s')
+        params.append(max_km)
+    for column, value in (('fuel', fuel), ('gearbox', gearbox), ('seller_type', seller_type)):
+        if value:
+            conditions.append(f'{column} = %s')
+            params.append(value)
+    if added_days is not None:
+        conditions.append("added_at > (NOW() AT TIME ZONE 'UTC') - make_interval(days => %s)")
+        params.append(added_days)
+    where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
+    order = CAR_SORTS.get(sort, CAR_SORTS['newest'])
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            WITH c AS (
+                SELECT source_id, source_name, city, listing_type, make, model,
+                       variant, year, mileage_km, fuel, gearbox, price_local,
+                       currency, price_usd, monthly_price_local, location,
+                       seller_type, is_promoted, url, thumbnail_url, listed_at,
+                       first_seen_at, last_seen_at, status,
+                       COALESCE(listed_at, first_seen_at) AS added_at,
+                       (status = 'active'
+                        AND last_seen_at > MAX(last_seen_at) OVER (PARTITION BY source_name)
+                                           - make_interval(days => %s)) AS active
+                FROM car_listings
+                WHERE LOWER(city) = LOWER(%s) AND listing_type = %s
+            )
+            SELECT *, COUNT(*) OVER () AS total_count FROM c
+            {where}
+            ORDER BY {order}
+            LIMIT %s OFFSET %s
+        """, (*params, limit, offset))
+        rows = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """SELECT DISTINCT fuel FROM car_listings
+               WHERE LOWER(city) = LOWER(%s) AND fuel IS NOT NULL ORDER BY fuel""",
+            (city,),
+        )
+        fuels = [row['fuel'] for row in cur.fetchall()]
+
+    total = rows[0]['total_count'] if rows else 0
+    for row in rows:
+        row.pop('total_count', None)
+        for key in ('listed_at', 'first_seen_at', 'last_seen_at', 'added_at'):
+            if row.get(key):
+                row[key] = row[key].isoformat() + 'Z'
+    return {'cars': rows, 'total': total, 'fuels': fuels}
+
+
+@app.route('/api/cars')
+def api_cars():
+    """Car listings, filtered server-side so phones only download one page.
+
+    Query params: city, type (buy|lease), max_price (DKK), min_year, max_km,
+    fuel, gearbox (manual|automatic), seller (private|dealer), added_days,
+    show_unavailable (1), sort (newest|price-asc|price-desc|year-desc|km-asc),
+    limit, offset.
+    """
+    listing_type = request.args.get('type', 'buy')
+    if listing_type not in ('buy', 'lease'):
+        return jsonify({'error': "type must be 'buy' or 'lease'"}), 400
+    limit = _int_arg('limit', minimum=1, maximum=200) or CAR_PAGE_SIZE
+    offset = _int_arg('offset', maximum=1_000_000) or 0
+    try:
+        result = get_cars(
+            city=request.args.get('city', 'Copenhagen'),
+            listing_type=listing_type,
+            max_price=_int_arg('max_price', maximum=100_000_000),
+            min_year=_int_arg('min_year', maximum=3000),
+            max_km=_int_arg('max_km', maximum=10_000_000),
+            fuel=request.args.get('fuel') or None,
+            gearbox=request.args.get('gearbox') or None,
+            seller_type=request.args.get('seller') or None,
+            added_days=_int_arg('added_days', minimum=1, maximum=3650),
+            show_unavailable=request.args.get('show_unavailable') == '1',
+            sort=request.args.get('sort', 'newest'),
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as e:
+        print(f"Database error: {e}")
+        return jsonify({'error': 'Could not load car listings'}), 500
+    result.update({'limit': limit, 'offset': offset})
+    return jsonify(result)
+
+
 @app.route('/api/listing/<path:source_id>')
 def api_listing(source_id):
     """Return a single listing."""

@@ -123,6 +123,49 @@ def init_db():
             )
         """)
 
+        # Car listings (the "Cars" section). Kept apart from seen_listings:
+        # different fields, no comments/ratings, own liveness bookkeeping.
+        # listing_type: 'buy' or 'lease'. monthly_price_local is set for
+        # leases only. listed_at is the source's own listing time when the
+        # card shows one (approximate: DBA shows "5 t.", "4 dage").
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS car_listings (
+                source_id TEXT PRIMARY KEY,
+                source_name TEXT NOT NULL,
+                city TEXT NOT NULL,
+                listing_type TEXT NOT NULL DEFAULT 'buy',
+                make TEXT,
+                model TEXT,
+                variant TEXT,
+                year INTEGER,
+                mileage_km INTEGER,
+                fuel TEXT,
+                gearbox TEXT,
+                price_local REAL,
+                currency TEXT,
+                price_usd REAL,
+                monthly_price_local REAL,
+                location TEXT,
+                seller_type TEXT,
+                is_promoted BOOLEAN NOT NULL DEFAULT FALSE,
+                url TEXT,
+                thumbnail_url TEXT,
+                listed_at TIMESTAMP,
+                first_seen_at TIMESTAMP NOT NULL,
+                last_seen_at TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                status_checked_at TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_car_city_type
+            ON car_listings(city, listing_type)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_car_last_seen
+            ON car_listings(last_seen_at)
+        """)
+
         # One-time purge: the Boligportal adapter used to insert five
         # hardcoded demo listings (boligportal_cph_001..005) whenever its
         # scrape failed, and they showed up on the site as real listings.

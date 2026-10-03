@@ -1,0 +1,255 @@
+"""Car storage, liveness orchestration, and /api/cars (need DATABASE_URL)."""
+
+import os
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from apartment_finder.cars.models import Car
+from apartment_finder.db import get_connection, init_db
+
+
+@pytest.fixture(autouse=True)
+def clean_cars():
+    if not os.environ.get("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not set — cannot run PostgreSQL tests")
+    init_db()
+    with get_connection() as conn:
+        conn.cursor().execute("DELETE FROM car_listings")
+    yield
+    with get_connection() as conn:
+        conn.cursor().execute("DELETE FROM car_listings")
+
+
+@pytest.fixture
+def service():
+    from apartment_finder.cars.service import CarListingService
+    return CarListingService()
+
+
+def _car(source_id, **overrides):
+    fields = dict(
+        source_id=source_id, source_name="dba", city="Copenhagen",
+        url=f"https://www.dba.dk/mobility/item/{source_id}", make="Toyota", model="Aygo",
+        year=2016, mileage_km=136000, fuel="Petrol", gearbox="manual",
+        price_local=65000.0, price_usd=9100.0, location="Hedehusene", seller_type="private",
+    )
+    fields.update(overrides)
+    return Car(**fields)
+
+
+def _row(source_id):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM car_listings WHERE source_id = %s", (source_id,))
+        return cur.fetchone()
+
+
+def _set(source_id, **cols):
+    sets = ", ".join(f"{k} = %s" for k in cols)
+    with get_connection() as conn:
+        conn.cursor().execute(
+            f"UPDATE car_listings SET {sets} WHERE source_id = %s", (*cols.values(), source_id)
+        )
+
+
+# --- CarListingService -----------------------------------------------------
+
+def test_upsert_inserts_new_and_returns_them(service):
+    new = service.upsert_listings([_car("a"), _car("b", is_promoted=True)])
+    assert [c.source_id for c in new] == ["a", "b"]
+    row = _row("b")
+    assert row["is_promoted"] is True
+    assert row["status"] == "active"
+    assert row["listing_type"] == "buy"
+    assert row["first_seen_at"] == row["last_seen_at"]
+
+
+def test_upsert_refreshes_seen_listing(service):
+    service.upsert_listings([_car("a", variant=None)])
+    old = datetime.utcnow() - timedelta(days=5)
+    _set("a", last_seen_at=old, first_seen_at=old, status="gone", is_promoted=True)
+
+    new = service.upsert_listings([_car("a", price_local=59000.0, variant="VVT-i", is_promoted=False)])
+
+    assert new == []
+    row = _row("a")
+    assert row["status"] == "active"  # re-seen means live again
+    assert row["price_local"] == 59000.0  # price cut picked up
+    assert row["variant"] == "VVT-i"  # backfilled
+    assert row["is_promoted"] is False
+    assert row["first_seen_at"] == old
+    assert row["last_seen_at"] > old
+
+
+def test_liveness_queue_and_status_recording(service):
+    service.upsert_listings([_car("seen"), _car("old1"), _car("old2"), _car("old3")])
+    past = datetime.utcnow() - timedelta(days=1)
+    for sid in ("old1", "old2", "old3"):
+        _set(sid, last_seen_at=past)
+    _set("old3", status_checked_at=datetime.utcnow() - timedelta(hours=1))
+
+    rows = service.get_listings_to_check("dba", datetime.utcnow() - timedelta(hours=2), 10)
+    # Never-checked first; the listing seen this run isn't queued
+    queued = [r["source_id"] for r in rows]
+    assert len(queued) == 3  # "seen" (scraped this run) isn't queued
+    assert set(queued[:2]) == {"old1", "old2"} and queued[2] == "old3"
+
+    service.record_status_check(["old1", "old2"], gone_ids=["old1"], live_ids=["old2"])
+    assert _row("old1")["status"] == "gone"
+    assert _row("old2")["status"] == "active"
+    assert _row("old2")["last_seen_at"] > past
+    assert _row("old1")["status_checked_at"] is not None
+
+
+def test_cleanup_deletes_only_expired(service):
+    service.upsert_listings([_car("fresh"), _car("stale")])
+    _set("stale", last_seen_at=datetime.utcnow() - timedelta(days=31))
+    assert service.cleanup_old_listings() == 1
+    assert _row("stale") is None
+    assert _row("fresh") is not None
+
+
+# --- run_car_pipeline ------------------------------------------------------
+
+def test_run_car_pipeline_stores_converts_and_checks_liveness(service):
+    from apartment_finder.main import run_car_pipeline
+
+    service.upsert_listings([_car("old_gone"), _car("old_unknown")])
+    for sid in ("old_gone", "old_unknown"):
+        _set(sid, last_seen_at=datetime.utcnow() - timedelta(days=1))
+
+    adapter = MagicMock()
+    adapter.fetch_listings.return_value = [_car("fresh", price_usd=None, price_local=100000.0)]
+    adapter.check_status.return_value = {
+        "https://www.dba.dk/mobility/item/old_gone": "gone",
+        "https://www.dba.dk/mobility/item/old_unknown": "unknown",
+    }
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "currency": "DKK",
+                                      "sources": ["dba", "nope"]}}}
+
+    with patch("apartment_finder.main.get_car_adapter", return_value=adapter), \
+         patch("apartment_finder.main.CurrencyService") as currency:
+        currency.return_value.convert_to_usd.return_value = 14000.0
+        result = run_car_pipeline(config, "copenhagen")
+
+    assert result == {"Copenhagen": 1}
+    assert _row("fresh")["price_usd"] == 14000.0
+    assert _row("old_gone")["status"] == "gone"
+    assert _row("old_unknown")["status"] == "active"
+    assert _row("old_unknown")["status_checked_at"] is not None
+    checked_urls = adapter.check_status.call_args.args[0]
+    assert "https://www.dba.dk/mobility/item/fresh" not in checked_urls
+
+
+def test_run_car_pipeline_raises_when_a_source_fails(service):
+    from apartment_finder.main import CarPipelineError, run_car_pipeline
+
+    service.upsert_listings([_car("stale")])
+    _set("stale", last_seen_at=datetime.utcnow() - timedelta(days=31))
+    empty = MagicMock()
+    empty.fetch_listings.return_value = []  # e.g. blocked, or markup changed
+    config = {"cars": {
+        "copenhagen": {"display_name": "Copenhagen", "sources": ["dba"]},
+        "aarhus": {"display_name": "Aarhus", "sources": ["dba"]},
+    }}
+
+    with patch("apartment_finder.main.get_car_adapter",
+               side_effect=[RuntimeError("bad config"), empty]):
+        with pytest.raises(CarPipelineError) as exc:
+            run_car_pipeline(config)
+
+    assert "copenhagen/dba: bad config" in str(exc.value)
+    assert "aarhus/dba: 0 listings" in str(exc.value)
+    # A failing first city doesn't skip later cities or cleanup
+    empty.fetch_listings.assert_called_once()
+    assert _row("stale") is None
+
+
+def test_upsert_takes_listing_type_and_prices_as_scraped(service):
+    service.upsert_listings([_car("flip", listing_type="lease", price_local=None,
+                                  monthly_price_local=2999.0)])
+    service.upsert_listings([_car("flip", price_local=120000.0)])
+    row = _row("flip")
+    assert (row["listing_type"], row["price_local"], row["monthly_price_local"]) == \
+        ("buy", 120000.0, None)
+
+
+def test_run_car_pipeline_rejects_unknown_city():
+    from apartment_finder.main import run_car_pipeline
+
+    with pytest.raises(ValueError):
+        run_car_pipeline({"cars": {"copenhagen": {}}}, "oslo")
+
+
+# --- /api/cars ---------------------------------------------------------------
+
+@pytest.fixture
+def client():
+    from apartment_finder.web.app import app
+    return app.test_client()
+
+
+def test_api_cars_filters_sorts_and_flags(service, client):
+    now = datetime.utcnow()
+    service.upsert_listings([
+        _car("cheap_old", price_local=20000.0, year=2005, mileage_km=250000, fuel="Diesel"),
+        _car("mid_auto", price_local=90000.0, year=2017, gearbox="automatic", seller_type="dealer"),
+        _car("pricey_ev", price_local=200000.0, year=2022, mileage_km=30000, fuel="Electric", gearbox=None),
+        _car("sold", price_local=50000.0),
+    ])
+    _set("cheap_old", listed_at=now - timedelta(days=10))
+    _set("mid_auto", listed_at=now - timedelta(hours=2))
+    _set("pricey_ev", listed_at=now - timedelta(days=2))
+    _set("sold", status="gone")
+
+    data = client.get("/api/cars").get_json()
+    assert data["total"] == 3  # gone listing hidden by default
+    assert [c["source_id"] for c in data["cars"]] == ["mid_auto", "pricey_ev", "cheap_old"]  # newest first
+    assert data["fuels"] == ["Diesel", "Electric", "Petrol"]
+
+    def ids(query):
+        return sorted(c["source_id"] for c in client.get("/api/cars?" + query).get_json()["cars"])
+
+    assert ids("max_price=100000") == ["cheap_old", "mid_auto"]
+    assert ids("min_year=2015") == ["mid_auto", "pricey_ev"]
+    assert ids("max_km=100000") == ["pricey_ev"]
+    assert ids("fuel=Electric") == ["pricey_ev"]
+    assert ids("gearbox=automatic") == ["mid_auto"]
+    assert ids("seller=dealer") == ["mid_auto"]
+    assert ids("added_days=3") == ["mid_auto", "pricey_ev"]
+    assert ids("show_unavailable=1") == ["cheap_old", "mid_auto", "pricey_ev", "sold"]
+    assert ids("max_price=abc") == ["cheap_old", "mid_auto", "pricey_ev"]  # bad input ignored
+
+    sold = next(c for c in client.get("/api/cars?show_unavailable=1").get_json()["cars"]
+                if c["source_id"] == "sold")
+    assert sold["active"] is False
+
+    by_price = client.get("/api/cars?sort=price-asc").get_json()["cars"]
+    assert [c["source_id"] for c in by_price] == ["cheap_old", "mid_auto", "pricey_ev"]
+
+    page = client.get("/api/cars?limit=2&offset=2").get_json()
+    assert page["total"] == 3 and [c["source_id"] for c in page["cars"]] == ["cheap_old"]
+
+
+def test_api_cars_active_flag_is_relative_to_source(service, client):
+    service.upsert_listings([_car("recent"), _car("stale")])
+    _set("stale", last_seen_at=datetime.utcnow() - timedelta(days=15))
+    data = client.get("/api/cars?show_unavailable=1").get_json()
+    assert {c["source_id"]: c["active"] for c in data["cars"]} == {"recent": True, "stale": False}
+
+
+def test_api_cars_lease_empty_and_bad_type(service, client):
+    service.upsert_listings([_car("a")])
+    assert client.get("/api/cars?type=lease").get_json()["total"] == 0
+    assert client.get("/api/cars?type=rent").status_code == 400
+    # Huge numbers are clamped, not a 500
+    assert client.get("/api/cars?added_days=99999999999&max_km=99999999999").status_code == 200
+
+
+def test_cars_page_served(client):
+    response = client.get("/cars")
+    assert response.status_code == 200
+    assert b"Lease sources are coming" in response.data
+    response.close()

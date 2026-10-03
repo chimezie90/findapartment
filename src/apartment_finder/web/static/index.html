@@ -38,6 +38,14 @@
             margin-bottom: 5px;
         }
 
+        .site-nav { display: flex; gap: 4px; margin-bottom: 10px; }
+        .site-nav a {
+            color: #cfd8e3; text-decoration: none; font-weight: 600;
+            padding: 6px 12px; border-radius: 16px; font-size: 0.9rem;
+        }
+        .site-nav a.active { background: rgba(255,255,255,0.18); color: #fff; }
+        .site-nav a:hover { color: #fff; }
+
         .stats {
             display: flex;
             gap: 20px;
@@ -590,6 +598,10 @@
 <body>
     <header>
         <div class="container">
+            <nav class="site-nav">
+                <a href="/" class="active">Apartments</a>
+                <a href="/cars">Cars</a>
+            </nav>
             <h1>Apartment Finder</h1>
             <div class="stats" id="stats">Loading...</div>
         </div>

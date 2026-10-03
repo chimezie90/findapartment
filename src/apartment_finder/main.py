@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 
 from .adapters import ADAPTER_REGISTRY, get_adapter
 from .adapters.base import SearchCriteria
+from .cars import CAR_ADAPTER_REGISTRY, get_car_adapter
+from .cars.service import CarListingService
 from .config import load_config
 from .models.apartment import Apartment
 from .services.currency import CurrencyService
@@ -233,6 +235,91 @@ class ApartmentFinder:
             self.dedup_service.mark_as_sent(all_sent)
 
 
+def run_car_pipeline(
+    config: dict, only_city: Optional[str] = None, only_source: Optional[str] = None
+) -> Dict[str, int]:
+    """
+    Fetch car listings for each city under config's `cars:` section, store
+    them, liveness-check cars this run didn't re-see, and expire old ones.
+
+    Returns:
+        {city display name: number of listings fetched}
+
+    Raises:
+        CarPipelineError: after storing and cleanup, if any source raised or
+        returned zero listings (so cron runs fail visibly).
+    """
+    car_cities = config.get("cars") or {}
+    if only_city and only_city not in car_cities:
+        raise ValueError(f"No cars config for city '{only_city}'. Configured: {list(car_cities)}")
+
+    service = CarListingService()
+    currency_service = CurrencyService()
+    run_started = datetime.utcnow()
+    fetched_by_city: Dict[str, int] = {}
+    failures: List[str] = []
+
+    for city_key, city_config in car_cities.items():
+        if only_city and city_key != only_city:
+            continue
+        display_name = city_config.get("display_name", city_key)
+        fetched_by_city[display_name] = 0
+
+        for source_name in city_config.get("sources", []):
+            if only_source and source_name != only_source:
+                continue
+            if source_name not in CAR_ADAPTER_REGISTRY:
+                logger.warning(f"Unknown car source {source_name} for {city_key}")
+                continue
+            try:
+                source_config = config.get("sources", {}).get(source_name, {})
+                adapter = get_car_adapter(source_name, source_config, city_config)
+                cars = adapter.fetch_listings()
+                for car in cars:
+                    amount = car.price_local if car.price_local is not None else car.monthly_price_local
+                    if car.price_usd is None and amount is not None:
+                        car.price_usd = currency_service.convert_to_usd(amount, car.currency)
+                service.upsert_listings(cars)
+                fetched_by_city[display_name] += len(cars)
+                if not cars:
+                    failures.append(f"{city_key}/{source_name}: 0 listings (blocked or markup changed?)")
+            except Exception as e:
+                logger.error(f"Error fetching cars from {source_name}: {e}")
+                failures.append(f"{city_key}/{source_name}: {e}")
+                continue
+
+            try:
+                rows = service.get_listings_to_check(source_name, run_started, LIVENESS_BATCH_SIZE)
+                if rows:
+                    statuses = adapter.check_status([r["url"] for r in rows])
+                    checked, gone, live = [], [], []
+                    for row in rows:
+                        status = statuses.get(row["url"])
+                        if status is None:
+                            continue  # not checked this run; stays first in line
+                        checked.append(row["source_id"])
+                        if status == "gone":
+                            gone.append(row["source_id"])
+                        elif status == "active":
+                            live.append(row["source_id"])
+                    service.record_status_check(checked, gone, live)
+            except Exception as e:
+                logger.error(f"Car liveness check failed for {source_name}: {e}")
+
+    service.cleanup_old_listings()
+    if failures:
+        # Fail the cron run visibly: a silently broken scraper ages every
+        # listing out after EXPIRY_DAYS (this wiped the apartments DB once).
+        raise CarPipelineError(
+            f"Fetched {fetched_by_city}; failed sources: " + "; ".join(failures)
+        )
+    return fetched_by_city
+
+
+class CarPipelineError(RuntimeError):
+    """At least one car source raised or returned no listings."""
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -251,6 +338,11 @@ def main():
     parser.add_argument(
         "--source",
         help="Only use this source (e.g., craigslist, findproperties)",
+    )
+    parser.add_argument(
+        "--cars",
+        action="store_true",
+        help="Run the car listings pipeline (config 'cars:' section) instead of apartments",
     )
     parser.add_argument(
         "--no-email",
@@ -302,6 +394,18 @@ def main():
         else:
             print("Failed to send test email - check your configuration")
             sys.exit(1)
+        return
+
+    # Car pipeline: own config section and table; never sends email
+    if args.cars:
+        try:
+            fetched = run_car_pipeline(load_config(args.config), args.city, args.source)
+        except Exception as e:
+            logger.exception(f"Car pipeline failed: {e}")
+            sys.exit(1)
+        print("\n=== Car Listings Results ===")
+        for city, count in fetched.items():
+            print(f"{city}: {count} listings fetched")
         return
 
     # Run the finder

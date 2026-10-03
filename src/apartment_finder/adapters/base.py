@@ -114,33 +114,42 @@ class BaseAdapter(ABC):
             count, many sites serve removed listings with 200), or "unknown".
             URLs left out weren't checked (e.g. time budget ran out).
         """
-        results = {}
-        deadline = time.monotonic() + LIVENESS_TIME_BUDGET_SECONDS
-        for i, url in enumerate(urls):
-            if time.monotonic() > deadline:
-                logger.info(f"Liveness time budget hit after {i}/{len(urls)} URLs")
-                break
-            if i:
-                time.sleep(LIVENESS_DELAY_SECONDS)
-            results[url] = "unknown"
-            try:
-                with requests.get(
-                    url, headers=LIVENESS_HEADERS, timeout=(5, 10), stream=True
-                ) as response:
-                    status_code = response.status_code
-            except requests.RequestException as e:
-                logger.debug(f"Liveness check failed for {url}: {e}")
-                continue
-            if status_code in (404, 410):
-                results[url] = "gone"
+        return check_urls_by_http_status(urls, self.source_name)
 
-        # A batch that is (nearly) all 404s is far likelier a URL-scheme change
-        # or a block page than mass removal -- don't act on it.
-        gone_count = sum(1 for status in results.values() if status == "gone")
-        if len(results) >= 5 and gone_count >= 0.8 * len(results):
-            logger.warning(
-                f"{self.source_name}: {gone_count}/{len(results)} URLs returned 404/410; "
-                "treating batch as inconclusive"
-            )
-            return {url: "unknown" for url in results}
-        return results
+
+def check_urls_by_http_status(urls: List[str], source_name: str) -> Dict[str, str]:
+    """
+    GET each URL; 404/410 means the listing was removed. Anything else (200,
+    bot blocks like 403/429, 5xx, timeouts) is "unknown". Shared by apartment
+    and car adapters. See BaseAdapter.check_status for the result contract.
+    """
+    results = {}
+    deadline = time.monotonic() + LIVENESS_TIME_BUDGET_SECONDS
+    for i, url in enumerate(urls):
+        if time.monotonic() > deadline:
+            logger.info(f"Liveness time budget hit after {i}/{len(urls)} URLs")
+            break
+        if i:
+            time.sleep(LIVENESS_DELAY_SECONDS)
+        results[url] = "unknown"
+        try:
+            with requests.get(
+                url, headers=LIVENESS_HEADERS, timeout=(5, 10), stream=True
+            ) as response:
+                status_code = response.status_code
+        except requests.RequestException as e:
+            logger.debug(f"Liveness check failed for {url}: {e}")
+            continue
+        if status_code in (404, 410):
+            results[url] = "gone"
+
+    # A batch that is (nearly) all 404s is far likelier a URL-scheme change
+    # or a block page than mass removal -- don't act on it.
+    gone_count = sum(1 for status in results.values() if status == "gone")
+    if len(results) >= 5 and gone_count >= 0.8 * len(results):
+        logger.warning(
+            f"{source_name}: {gone_count}/{len(results)} URLs returned 404/410; "
+            "treating batch as inconclusive"
+        )
+        return {url: "unknown" for url in results}
+    return results

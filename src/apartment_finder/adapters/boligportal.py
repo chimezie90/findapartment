@@ -81,8 +81,7 @@ class BoligportalAdapter(BaseAdapter):
             response.raise_for_status()
         except requests.RequestException as e:
             logger.error(f"Failed to fetch Boligportal listings: {e}")
-            # Return sample listings for Copenhagen to demonstrate the feature
-            return self._get_sample_listings()
+            return []
 
         soup = BeautifulSoup(response.text, "html.parser")
         apartments = []
@@ -100,10 +99,6 @@ class BoligportalAdapter(BaseAdapter):
             apartment = self._parse_listing(listing, base_url)
             if apartment:
                 apartments.append(apartment)
-
-        # If no listings found from scraping, return sample data
-        if not apartments:
-            return self._get_sample_listings()
 
         return apartments
 
@@ -205,91 +200,6 @@ class BoligportalAdapter(BaseAdapter):
         except Exception as e:
             logger.debug(f"Failed to parse listing: {e}")
             return None
-
-    def _get_sample_listings(self) -> List[Apartment]:
-        """Return sample Copenhagen listings for demonstration."""
-        sample_listings = [
-            {
-                "id": "cph_001",
-                "title": "Bright 2BR in Frederiksberg",
-                "price_dkk": 14000,
-                "bedrooms": 2,
-                "sqm": 75,
-                "neighborhood": "Frederiksberg",
-                "lat": 55.6786,
-                "lng": 12.5319,
-            },
-            {
-                "id": "cph_002",
-                "title": "Modern 1BR near Tivoli",
-                "price_dkk": 11500,
-                "bedrooms": 1,
-                "sqm": 55,
-                "neighborhood": "Vesterbro",
-                "lat": 55.6736,
-                "lng": 12.5648,
-            },
-            {
-                "id": "cph_003",
-                "title": "Cozy Studio in Nørrebro",
-                "price_dkk": 8500,
-                "bedrooms": 1,
-                "sqm": 35,
-                "neighborhood": "Nørrebro",
-                "lat": 55.6984,
-                "lng": 12.5459,
-            },
-            {
-                "id": "cph_004",
-                "title": "Spacious 2BR in Østerbro",
-                "price_dkk": 16000,
-                "bedrooms": 2,
-                "sqm": 85,
-                "neighborhood": "Østerbro",
-                "lat": 55.7064,
-                "lng": 12.5761,
-            },
-            {
-                "id": "cph_005",
-                "title": "Charming 1BR in City Center",
-                "price_dkk": 13000,
-                "bedrooms": 1,
-                "sqm": 50,
-                "neighborhood": "Indre By",
-                "lat": 55.6786,
-                "lng": 12.5699,
-            },
-        ]
-
-        apartments = []
-        for listing in sample_listings:
-            apt = Apartment(
-                source_id=f"boligportal_{listing['id']}",
-                source_name="boligportal",
-                title=listing["title"],
-                url=f"https://www.boligportal.dk/lejebolig/{listing['id']}",
-                price_local=float(listing["price_dkk"]),
-                currency="DKK",
-                price_usd=float(listing["price_dkk"]) * DKK_TO_USD,
-                bedrooms=listing["bedrooms"],
-                bathrooms=1,
-                sqft=int(listing["sqm"] * 10.764),
-                address=None,
-                neighborhood=listing["neighborhood"],
-                city=self.city_name,
-                country="Denmark",
-                latitude=listing["lat"],
-                longitude=listing["lng"],
-                amenities=Amenities(),
-                description=None,
-                images=[],
-                thumbnail_url=None,
-                posted_date=None,
-                fetched_at=datetime.utcnow(),
-            )
-            apartments.append(apt)
-
-        return apartments
 
     def _normalize(self, raw: Dict[str, Any]) -> Optional[Apartment]:
         """Not used in direct scraping approach."""

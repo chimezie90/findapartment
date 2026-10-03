@@ -373,3 +373,40 @@ def test_cars_page_served(client):
     assert response.status_code == 200
     assert b"Max down payment" in response.data
     response.close()
+
+
+def _clear_fetch_locks():
+    with get_connection() as conn:
+        conn.cursor().execute("DELETE FROM fetch_locks")
+
+
+def test_fetch_cars_endpoint_validates_and_throttles(client):
+    _clear_fetch_locks()
+    assert client.post("/api/fetch-cars", json={"source": "bilbasen"}).status_code == 400
+    assert client.post("/api/fetch-cars", data="x").status_code == 400  # no default source
+
+    log = "12:00 | INFO | apartment_finder.cars.service | Stored 150 car listings (2 new, 0 skipped)"
+    done = MagicMock(returncode=0, stdout=log, stderr="")
+    with patch("apartment_finder.web.app.subprocess.run", return_value=done) as run:
+        first = client.post("/api/fetch-cars", json={"source": "dba"})
+        second = client.post("/api/fetch-cars", json={"source": "dba"})
+        other = client.post("/api/fetch-cars", json={"source": "findleasing"})
+
+    assert first.status_code == 200
+    assert first.get_json()["summary"] == ["Stored 150 car listings (2 new, 0 skipped)"]
+    assert run.call_args_list[0].args[0][-3:] == ["--source", "dba", "--no-email"]
+    assert second.status_code == 429  # cooldown is per source, stored in Postgres
+    assert other.status_code == 200
+    assert run.call_count == 2
+
+
+def test_fetch_cars_failure_does_not_leak_logs(client):
+    _clear_fetch_locks()
+    crash = MagicMock(returncode=1, stdout="Traceback (most recent call last):\n  File \"/home/runner/workspace/x.py\"",
+                      stderr='psycopg2.OperationalError: connection to server at "db.internal" failed')
+    with patch("apartment_finder.web.app.subprocess.run", return_value=crash):
+        response = client.post("/api/fetch-cars", json={"source": "dba"})
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 502
+    assert "Traceback" not in body and "/home/runner" not in body and "db.internal" not in body

@@ -1,0 +1,58 @@
+name: Refresh listings
+
+# Replit doesn't run the [[scheduled]] blocks in .replit, so this calls the
+# live site's own fetch endpoints. The scrapers run on the Replit server and
+# write to the production database. A failed fetch fails the job, so GitHub
+# emails the repo owner instead of the site silently going stale.
+
+on:
+  schedule:
+    - cron: '0 7,19 * * *'   # apartments (every city) + cars for sale, twice a day
+    - cron: '30 5 * * *'     # car leasing, once a day (politeness: see cars/findleasing.py)
+  workflow_dispatch:
+    inputs:
+      what:
+        description: 'What to refresh'
+        type: choice
+        options: [all, apartments, cars, leasing]
+        default: all
+
+env:
+  SITE: https://findapartment.replit.app
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Decide what to run
+        id: plan
+        run: |
+          what="${{ github.event.inputs.what }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "30 5 * * *" ]; then what=leasing; else what=twice-daily; fi
+          fi
+          echo "what=$what" >> "$GITHUB_OUTPUT"
+
+      - name: Apartments
+        if: contains(fromJSON('["all","apartments","twice-daily"]'), steps.plan.outputs.what)
+        run: |
+          failed=0
+          for city in copenhagen nyc la dubai lisbon bali sri_lanka; do
+            echo "== $city"
+            body=$(curl -sS -m 520 -X POST "$SITE/api/fetch" -H 'Content-Type: application/json' -d "{\"city\":\"$city\"}" || echo '{"success":false,"error":"request failed"}')
+            echo "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("ok" if d.get("success") else "FAILED: " + str(d.get("error"))[:500]); sys.exit(0 if d.get("success") else 1)' || failed=1
+          done
+          exit $failed
+
+      - name: Cars for sale (DBA)
+        if: always() && contains(fromJSON('["all","cars","twice-daily"]'), steps.plan.outputs.what)
+        run: |
+          curl -sS -m 520 -X POST "$SITE/api/fetch-cars" -H 'Content-Type: application/json' -d '{"source":"dba"}' \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d.get("summary") or []) or d.get("error")); sys.exit(0 if d.get("success") else 1)'
+
+      - name: Car leasing (findleasing.nu)
+        if: always() && contains(fromJSON('["all","leasing"]'), steps.plan.outputs.what)
+        run: |
+          curl -sS -m 520 -X POST "$SITE/api/fetch-cars" -H 'Content-Type: application/json' -d '{"source":"findleasing"}' \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d.get("summary") or []) or d.get("error")); sys.exit(0 if d.get("success") else 1)'

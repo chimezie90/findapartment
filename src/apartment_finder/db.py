@@ -175,6 +175,15 @@ def init_db():
             ON car_listings(last_seen_at)
         """)
 
+        # Cooldowns for the public fetch endpoints, shared by every app
+        # instance (autoscale runs several, so in-memory state isn't enough)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fetch_locks (
+                name TEXT PRIMARY KEY,
+                started_at TIMESTAMP NOT NULL
+            )
+        """)
+
         # One-time purge: the Boligportal adapter used to insert five
         # hardcoded demo listings (boligportal_cph_001..005) whenever its
         # scrape failed, and they showed up on the site as real listings.

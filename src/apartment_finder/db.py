@@ -148,6 +148,7 @@ def init_db():
                 location TEXT,
                 seller_type TEXT,
                 is_promoted BOOLEAN NOT NULL DEFAULT FALSE,
+                vat_added BOOLEAN NOT NULL DEFAULT FALSE,
                 url TEXT,
                 thumbnail_url TEXT,
                 listed_at TIMESTAMP,
@@ -157,6 +158,9 @@ def init_db():
                 status_checked_at TIMESTAMP
             )
         """)
+        cur.execute(
+            "ALTER TABLE car_listings ADD COLUMN IF NOT EXISTS vat_added BOOLEAN NOT NULL DEFAULT FALSE"
+        )
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_car_city_type
             ON car_listings(city, listing_type)

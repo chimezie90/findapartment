@@ -235,6 +235,11 @@ class ApartmentFinder:
             self.dedup_service.mark_as_sent(all_sent)
 
 
+# A source run where more than this share of listings lack price or year is
+# treated as a markup change and not stored.
+INCOMPLETE_LISTING_RATIO = 0.3
+
+
 def run_car_pipeline(
     config: dict, only_city: Optional[str] = None, only_source: Optional[str] = None
 ) -> Dict[str, int]:
@@ -264,17 +269,34 @@ def run_car_pipeline(
             continue
         display_name = city_config.get("display_name", city_key)
         fetched_by_city[display_name] = 0
+        attempted = 0
 
         for source_name in city_config.get("sources", []):
             if only_source and source_name != only_source:
                 continue
             if source_name not in CAR_ADAPTER_REGISTRY:
                 logger.warning(f"Unknown car source {source_name} for {city_key}")
+                failures.append(f"{city_key}/{source_name}: unknown source")
                 continue
+            attempted += 1
             try:
                 source_config = config.get("sources", {}).get(source_name, {})
                 adapter = get_car_adapter(source_name, source_config, city_config)
                 cars = adapter.fetch_listings()
+                for error in getattr(adapter, "page_errors", []):
+                    failures.append(f"{city_key}/{source_name}: {error}")
+                # Cards that parse but lack price/year mean the markup moved
+                # under us; storing them would null out good prices.
+                incomplete = sum(
+                    1 for car in cars
+                    if car.year is None or (car.price_local is None and car.monthly_price_local is None)
+                )
+                if cars and incomplete > INCOMPLETE_LISTING_RATIO * len(cars):
+                    failures.append(
+                        f"{city_key}/{source_name}: {incomplete}/{len(cars)} listings missing "
+                        "price or year (markup changed?); not stored"
+                    )
+                    continue
                 for car in cars:
                     amount = car.price_local if car.price_local is not None else car.monthly_price_local
                     if car.price_usd is None and amount is not None:
@@ -305,6 +327,9 @@ def run_car_pipeline(
                     service.record_status_check(checked, gone, live)
             except Exception as e:
                 logger.error(f"Car liveness check failed for {source_name}: {e}")
+
+        if attempted == 0:
+            failures.append(f"{city_key}: no car sources ran")
 
     service.cleanup_old_listings()
     if failures:

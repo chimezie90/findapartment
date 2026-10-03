@@ -44,6 +44,13 @@ def test_paid_placement_card(cars):
     assert audi.thumbnail_url.startswith("https://images.dbastatic.dk/dynamic/240w/item/25373599/")
 
 
+def test_ex_vat_price_gets_moms_added(cars):
+    van = cars["dba_25478260"]  # Citroen Jumper, "15.000 kr. ekskl. moms"
+    assert van.vat_added is True
+    assert van.price_local == 18750
+    assert sum(c.vat_added for c in cars.values()) == 1
+
+
 def test_only_one_card_is_promoted(cars):
     assert [c.source_id for c in cars.values() if c.is_promoted] == ["dba_25373599"]
 
@@ -123,6 +130,7 @@ def test_fetch_stops_on_block_and_dedupes(mock_get, _sleep):
 
     assert len(result) == 10
     assert mock_get.call_count == 3
+    assert adapter.page_errors == ["page 3: HTTP 202"]
     params = mock_get.call_args_list[0].kwargs["params"]
     assert params == {"location": "0.200001", "sort": "PUBLISHED_DESC", "page": 1}
 

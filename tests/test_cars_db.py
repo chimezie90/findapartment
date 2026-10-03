@@ -127,7 +127,7 @@ def test_run_car_pipeline_stores_converts_and_checks_liveness(service):
         "https://www.dba.dk/mobility/item/old_unknown": "unknown",
     }
     config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "currency": "DKK",
-                                      "sources": ["dba", "nope"]}}}
+                                      "sources": ["dba"]}}}
 
     with patch("apartment_finder.main.get_car_adapter", return_value=adapter), \
          patch("apartment_finder.main.CurrencyService") as currency:
@@ -165,6 +165,69 @@ def test_run_car_pipeline_raises_when_a_source_fails(service):
     # A failing first city doesn't skip later cities or cleanup
     empty.fetch_listings.assert_called_once()
     assert _row("stale") is None
+
+
+def test_run_car_pipeline_fails_on_unknown_or_unmatched_source(service):
+    from apartment_finder.main import CarPipelineError, run_car_pipeline
+
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["dbaa"]}}}
+    with pytest.raises(CarPipelineError, match="dbaa: unknown source"):
+        run_car_pipeline(config, "copenhagen")
+
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["dba"]}}}
+    with pytest.raises(CarPipelineError, match="no car sources ran"):
+        run_car_pipeline(config, "copenhagen", only_source="foo")
+
+
+def test_run_car_pipeline_rejects_mostly_incomplete_listings(service):
+    from apartment_finder.main import CarPipelineError, run_car_pipeline
+
+    service.upsert_listings([_car("priced")])
+    adapter = MagicMock()
+    adapter.page_errors = []
+    # Markup drift: cards still parse but price/year selectors no longer match
+    adapter.fetch_listings.return_value = [
+        _car("priced", price_local=None, year=None),
+        _car("other", price_local=None),
+        _car("ok"),
+    ]
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["dba"]}}}
+
+    with patch("apartment_finder.main.get_car_adapter", return_value=adapter):
+        with pytest.raises(CarPipelineError, match="missing price or year"):
+            run_car_pipeline(config, "copenhagen")
+
+    assert _row("priced")["price_local"] == 65000.0  # not nulled out
+    assert _row("ok") is None
+
+
+def test_run_car_pipeline_reports_partial_page_failures(service):
+    from apartment_finder.main import CarPipelineError, run_car_pipeline
+
+    adapter = MagicMock()
+    adapter.page_errors = ["page 2: HTTP 429"]
+    adapter.fetch_listings.return_value = [_car("p1")]
+    adapter.check_status.return_value = {}
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["dba"]}}}
+
+    with patch("apartment_finder.main.get_car_adapter", return_value=adapter):
+        with pytest.raises(CarPipelineError, match="page 2: HTTP 429"):
+            run_car_pipeline(config, "copenhagen")
+
+    assert _row("p1") is not None  # page 1 still stored
+
+
+def test_upsert_skips_bad_row_without_losing_batch(service):
+    new = service.upsert_listings([_car("good1"), _car("bad", mileage_km=10**12), _car("good2")])
+
+    assert [c.source_id for c in new] == ["good1", "good2"]
+    assert _row("bad") is None
+    assert _row("good2") is not None
+
+
+def test_upsert_stores_vat_flag(service):
+    service.upsert_listings([_car("van", price_local=18750.0, vat_added=True)])
+    assert _row("van")["vat_added"] is True
 
 
 def test_upsert_takes_listing_type_and_prices_as_scraped(service):

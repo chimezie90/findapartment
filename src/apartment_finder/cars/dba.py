@@ -3,8 +3,14 @@
 The search page https://www.dba.dk/mobility/search/car is server-rendered:
 ~50 <article> cards per page, each with make/model, variant, a spec line
 ("2016 ∙ 136.000 km ∙ Benzin ∙ Manuelt"), price in DKK, location, seller
-type, and listing age. We fetch the newest few pages for the configured
-region and filter in the UI.
+type, and listing age. We fetch the region's whole catalog and filter in
+the UI.
+
+Full catalog: DBA stops paging at 50 (page 51 quietly returns page 1), so
+one search reaches at most ~2,500 cars. Splitting by seller with
+`dealer_segment` (2 = dealers, 3 = private) keeps each search under that:
+~3,700 Copenhagen cars in ~75 requests. robots.txt disallows `sort=`, so we
+never send it.
 
 Region filter: `location=0.200001` is DBA's "København og omegn" region
 (found in the page's own location filter links).
@@ -30,6 +36,9 @@ from .models import Car
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://www.dba.dk/mobility/search/car"
+# Same search as JSON (robots.txt allows it); used only for the result count
+COUNT_URL = "https://www.dba.dk/mobility/search/api/search/SEARCH_ID_CAR_USED"
+COMPLETE_SHARE = 0.98  # a segment counts as fully fetched at this share of DBA's own total
 ITEM_URL = "https://www.dba.dk/mobility/item/{id}"
 COPENHAGEN_LOCATION = "0.200001"  # "København og omegn"
 
@@ -38,7 +47,9 @@ HEADERS = {
     "Accept-Language": "da,en;q=0.8",
 }
 PAGE_DELAY_SECONDS = 1.5
-MAX_PAGES_LIMIT = 3
+MAX_PAGES_LIMIT = 50  # DBA's own paging limit per search
+DEALER_SEGMENTS = {"2": "dealer", "3": "private"}
+FULL_PAGE_SIZE = 50
 
 ITEM_ID_RE = re.compile(r"/mobility/item/(\d+)")
 YEAR_RE = re.compile(r"^(19|20)\d{2}$")
@@ -210,11 +221,11 @@ def _parse_card(article, city: str, now: datetime) -> Optional[Car]:
 @register_car_adapter("dba")
 class DbaCarAdapter:
     """
-    DBA cars for sale, newest first, for one region.
+    DBA cars for sale for one region: the whole catalog, split by seller.
 
     Config (cars.<city>.dba):
         location: DBA region code (default "0.200001", København og omegn)
-        max_pages: pages of ~50 cards to fetch (default 3, capped at 3)
+        max_pages: pages of ~50 cards per seller segment (default and cap 50)
     """
 
     source_name = "dba"
@@ -226,38 +237,86 @@ class DbaCarAdapter:
         self.max_pages = min(int(dba_config.get("max_pages", MAX_PAGES_LIMIT)), MAX_PAGES_LIMIT)
         self.city_name = city_config.get("display_name", "Copenhagen")
         self.page_errors: List[str] = []  # set by fetch_listings; pipeline treats as failure
+        self._segments_complete = 0
+        self._shortfalls: List[str] = []
+
+    @property
+    def full_catalog(self) -> bool:
+        """True only after a clean run that collected (nearly) every car DBA
+        says each seller segment has, so cars it didn't return can be marked
+        gone. Page-shape heuristics alone can mistake an error page or one
+        unparseable card for the end of the catalog."""
+        return (not self.page_errors and not self._shortfalls
+                and self._segments_complete == len(DEALER_SEGMENTS))
+
+    def _segment_total(self, segment: str) -> Optional[int]:
+        """DBA's own result count for a seller segment, or None if unavailable."""
+        params = {"location": self.location, "dealer_segment": segment, "page": 1}
+        try:
+            response = requests.get(COUNT_URL, params=params, headers=HEADERS, timeout=30)
+            response.raise_for_status()
+            return int(response.json()["metadata"]["result_size"]["match_count"])
+        except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+            logger.warning(f"DBA segment {segment} count unavailable: {e}")
+            return None
 
     def fetch_listings(self) -> List[Car]:
         cars: Dict[str, Car] = {}
+        for segment, label in DEALER_SEGMENTS.items():
+            if not self._fetch_segment(segment, label, cars):
+                break  # blocked or broken: don't keep hitting the site
+        logger.info(f"Fetched {len(cars)} car listings from DBA")
+        return list(cars.values())
+
+    def _fetch_segment(self, segment: str, label: str, cars: Dict[str, Car]) -> bool:
+        """Page through one seller segment. Returns False on an error."""
+        before = len(cars)
+        ok = self._walk_segment(segment, label, cars)
+        if ok:
+            total = self._segment_total(segment)
+            seen = len(cars) - before
+            if total is None or seen < COMPLETE_SHARE * total:
+                self._shortfalls.append(f"{label}: {seen} of {total if total is not None else '?'}")
+                logger.info(f"DBA {label}: got {seen} of {total} cars; not treating as complete")
+        return ok
+
+    def _walk_segment(self, segment: str, label: str, cars: Dict[str, Car]) -> bool:
         for page in range(1, self.max_pages + 1):
-            if page > 1:
-                time.sleep(PAGE_DELAY_SECONDS)
-            params = {"location": self.location, "sort": "PUBLISHED_DESC", "page": page}
+            time.sleep(PAGE_DELAY_SECONDS)
+            params = {"location": self.location, "dealer_segment": segment, "page": page}
             try:
                 response = requests.get(SEARCH_URL, params=params, headers=HEADERS, timeout=30)
             except requests.RequestException as e:
-                logger.error(f"DBA page {page} request failed: {e}")
-                self.page_errors.append(f"page {page}: {e}")
-                break
+                logger.error(f"DBA {label} page {page} request failed: {e}")
+                self.page_errors.append(f"{label} page {page}: {e}")
+                return False
             # Anything but a full 200 page (403/429, or a 202 with an empty
             # body like Bilbasen's bot wall) means stop -- don't push on.
             if response.status_code != 200 or not response.text.strip():
                 logger.error(
-                    f"DBA page {page} returned HTTP {response.status_code} "
+                    f"DBA {label} page {page} returned HTTP {response.status_code} "
                     f"({len(response.text)} bytes); stopping"
                 )
-                self.page_errors.append(f"page {page}: HTTP {response.status_code}")
-                break
+                self.page_errors.append(f"{label} page {page}: HTTP {response.status_code}")
+                return False
             page_cars = parse_search_page(response.text, self.city_name)
             if not page_cars:
-                logger.warning(f"DBA page {page} had no parseable listings; stopping")
-                self.page_errors.append(f"page {page}: no parseable listings")
-                break
-            for car in page_cars:
-                # Paid placements can repeat across pages
-                cars.setdefault(car.source_id, car)
-        logger.info(f"Fetched {len(cars)} car listings from DBA")
-        return list(cars.values())
+                if page == 1:
+                    logger.warning(f"DBA {label} page 1 had no parseable listings")
+                    self.page_errors.append(f"{label} page 1: no parseable listings")
+                    return False
+                self._segments_complete += 1  # past the end
+                return True
+            new = [car for car in page_cars if car.source_id not in cars]
+            for car in new:
+                cars[car.source_id] = car
+            # A short page is the last one; a page of only repeats means DBA
+            # wrapped back to page 1 (it does past its paging limit)
+            if len(page_cars) < FULL_PAGE_SIZE or not new:
+                self._segments_complete += 1
+                return True
+        logger.info(f"DBA {label}: hit the {self.max_pages}-page limit; catalog not complete")
+        return True
 
     def check_status(self, urls: List[str]) -> Dict[str, str]:
         """404/410 -> gone; anything else -> unknown (see module docstring)."""

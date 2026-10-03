@@ -169,14 +169,34 @@ class CarListingService:
             f"{len(live_ids or [])} confirmed live"
         )
 
-    def mark_unseen_gone(self, source_name: str, seen_before: datetime) -> int:
-        """Mark a source's active cars not seen since `seen_before` as gone."""
+    # One run may not hide more than this share of a source's active cars;
+    # beyond it, a "full" catalog run is more likely broken than real
+    MAX_GONE_SHARE = 0.2
+
+    def mark_unseen_gone(self, source_name: str, city: str, seen_before: datetime) -> Optional[int]:
+        """Mark a source's active cars in `city` not seen since `seen_before`
+        as gone. Returns the count, or None if it would exceed MAX_GONE_SHARE
+        (nothing is changed then)."""
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
+                """SELECT COUNT(*) FILTER (WHERE last_seen_at < %s) AS unseen, COUNT(*) AS active
+                   FROM car_listings
+                   WHERE source_name = %s AND LOWER(city) = LOWER(%s) AND status = 'active'""",
+                (seen_before, source_name, city),
+            )
+            row = cur.fetchone()
+            if row["active"] and row["unseen"] > self.MAX_GONE_SHARE * row["active"]:
+                logger.warning(
+                    f"{source_name}: {row['unseen']} of {row['active']} active cars unseen; "
+                    "too many to mark gone in one run"
+                )
+                return None
+            cur.execute(
                 """UPDATE car_listings SET status = 'gone', status_checked_at = %s
-                   WHERE source_name = %s AND status = 'active' AND last_seen_at < %s""",
-                (datetime.utcnow(), source_name, seen_before),
+                   WHERE source_name = %s AND LOWER(city) = LOWER(%s)
+                     AND status = 'active' AND last_seen_at < %s""",
+                (datetime.utcnow(), source_name, city, seen_before),
             )
             count = cur.rowcount
         logger.info(f"Marked {count} {source_name} cars gone (not in the full catalog)")

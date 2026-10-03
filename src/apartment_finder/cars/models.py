@@ -23,6 +23,10 @@ class Car:
     listing_type: str = "buy"  # "buy" or "lease"
     price_local: Optional[float] = None  # Purchase price (buy) -- None for leases
     monthly_price_local: Optional[float] = None  # Lease only
+    down_payment_local: Optional[int] = None  # Lease only: upfront payment
+    term_months: Optional[int] = None  # Lease only
+    km_per_year: Optional[int] = None  # Lease only: included mileage, often unstated
+    lease_kind: Optional[str] = None  # Lease only: "financial" / "operational" / "monthly rental"
     currency: str = "DKK"
     price_usd: Optional[float] = None
     location: Optional[str] = None

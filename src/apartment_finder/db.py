@@ -158,9 +158,14 @@ def init_db():
                 status_checked_at TIMESTAMP
             )
         """)
-        cur.execute(
-            "ALTER TABLE car_listings ADD COLUMN IF NOT EXISTS vat_added BOOLEAN NOT NULL DEFAULT FALSE"
-        )
+        for column_def in (
+            "vat_added BOOLEAN NOT NULL DEFAULT FALSE",
+            "down_payment_local INTEGER",
+            "term_months INTEGER",
+            "km_per_year INTEGER",
+            "lease_kind TEXT",
+        ):
+            cur.execute(f"ALTER TABLE car_listings ADD COLUMN IF NOT EXISTS {column_def}")
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_car_city_type
             ON car_listings(city, listing_type)

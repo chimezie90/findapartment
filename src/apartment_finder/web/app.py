@@ -178,6 +178,11 @@ CAR_SORTS = {
     'price-desc': 'COALESCE(price_local, monthly_price_local) DESC NULLS LAST, added_at DESC, source_id',
     'year-desc': 'year DESC NULLS LAST, added_at DESC, source_id',
     'km-asc': 'mileage_km ASC NULLS LAST, added_at DESC, source_id',
+    # Leases: monthly price with the down payment spread over the term, so a
+    # low monthly price propped up by a big down payment doesn't look cheap,
+    # and a 12-month and a 60-month contract compare fairly
+    'effective-asc': ('(monthly_price_local * term_months + COALESCE(down_payment_local, 0))'
+                      ' / NULLIF(term_months, 0) ASC NULLS LAST, added_at DESC, source_id'),
 }
 
 
@@ -194,7 +199,7 @@ def _int_arg(name, minimum=0, maximum=None):
 def get_cars(city='Copenhagen', listing_type='buy', max_price=None, min_year=None,
              max_km=None, fuel=None, gearbox=None, seller_type=None,
              added_days=None, show_unavailable=False, sort='newest',
-             limit=CAR_PAGE_SIZE, offset=0):
+             max_down=None, lease_kind=None, limit=CAR_PAGE_SIZE, offset=0):
     """Filtered, sorted page of car listings plus the total match count."""
     conditions, params = [], [CAR_ACTIVE_WINDOW_DAYS, city, listing_type]
     if not show_unavailable:
@@ -208,7 +213,11 @@ def get_cars(city='Copenhagen', listing_type='buy', max_price=None, min_year=Non
     if max_km is not None:
         conditions.append('mileage_km <= %s')
         params.append(max_km)
-    for column, value in (('fuel', fuel), ('gearbox', gearbox), ('seller_type', seller_type)):
+    if max_down is not None:
+        conditions.append('down_payment_local <= %s')  # unknown down payment fails the filter
+        params.append(max_down)
+    for column, value in (('fuel', fuel), ('gearbox', gearbox), ('seller_type', seller_type),
+                          ('lease_kind', lease_kind)):
         if value:
             conditions.append(f'{column} = %s')
             params.append(value)
@@ -224,7 +233,8 @@ def get_cars(city='Copenhagen', listing_type='buy', max_price=None, min_year=Non
             WITH c AS (
                 SELECT source_id, source_name, city, listing_type, make, model,
                        variant, year, mileage_km, fuel, gearbox, price_local,
-                       currency, price_usd, monthly_price_local, location,
+                       currency, price_usd, monthly_price_local, down_payment_local,
+                       term_months, km_per_year, lease_kind, location,
                        seller_type, is_promoted, vat_added, url, thumbnail_url, listed_at,
                        first_seen_at, last_seen_at, status,
                        COALESCE(listed_at, first_seen_at) AS added_at,
@@ -263,6 +273,7 @@ def api_cars():
 
     Query params: city, type (buy|lease), max_price (DKK), min_year, max_km,
     fuel, gearbox (manual|automatic), seller (private|dealer), added_days,
+    max_down (lease down payment, DKK), lease_kind (financial|operational),
     show_unavailable (1), sort (newest|price-asc|price-desc|year-desc|km-asc),
     limit, offset.
     """
@@ -284,6 +295,8 @@ def api_cars():
             added_days=_int_arg('added_days', minimum=1, maximum=3650),
             show_unavailable=request.args.get('show_unavailable') == '1',
             sort=request.args.get('sort', 'newest'),
+            max_down=_int_arg('max_down', maximum=100_000_000),
+            lease_kind=request.args.get('lease_kind') or None,
             limit=limit,
             offset=offset,
         )

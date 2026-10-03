@@ -206,11 +206,12 @@ def test_full_catalog_source_marks_unseen_gone_without_checks(service):
 
     lease = dict(listing_type="lease", price_local=None, monthly_price_local=3000.0,
                  term_months=36, source_name="findleasing")
-    service.upsert_listings([_car("still_there", **lease), _car("dropped", **lease)])
-    for sid in ("still_there", "dropped"):
+    kept = [f"still_there_{n}" for n in range(6)]
+    service.upsert_listings([_car(sid, **lease) for sid in kept + ["dropped"]])
+    for sid in kept + ["dropped"]:
         _set(sid, last_seen_at=datetime.utcnow() - timedelta(days=1))
     adapter = MagicMock(full_catalog=True, page_errors=[])
-    adapter.fetch_listings.return_value = [_car("still_there", **lease)]
+    adapter.fetch_listings.return_value = [_car(sid, **lease) for sid in kept]
     config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["findleasing"]}}}
 
     with patch("apartment_finder.main.get_car_adapter", return_value=adapter), \
@@ -218,8 +219,27 @@ def test_full_catalog_source_marks_unseen_gone_without_checks(service):
         run_car_pipeline(config, "copenhagen")
 
     assert _row("dropped")["status"] == "gone"
-    assert _row("still_there")["status"] == "active"
+    assert _row("still_there_0")["status"] == "active"
     adapter.check_status.assert_not_called()
+
+
+def test_mark_unseen_gone_refuses_mass_removal_and_scopes_city(service):
+    service.upsert_listings([_car(f"c{n}") for n in range(10)] + [_car("other_city", city="Aarhus")])
+    old = datetime.utcnow() - timedelta(days=1)
+    for n in range(3):
+        _set(f"c{n}", last_seen_at=old)
+    _set("other_city", last_seen_at=old)
+    cutoff = datetime.utcnow() - timedelta(hours=1)
+
+    # 3 of 10 unseen = 30% > 20% cap: nothing changes
+    assert service.mark_unseen_gone("dba", "Copenhagen", cutoff) is None
+    assert _row("c0")["status"] == "active"
+
+    _set("c1", last_seen_at=datetime.utcnow())
+    _set("c2", last_seen_at=datetime.utcnow())
+    assert service.mark_unseen_gone("dba", "Copenhagen", cutoff) == 1
+    assert _row("c0")["status"] == "gone"
+    assert _row("other_city")["status"] == "active"  # other city untouched
 
 
 def test_lease_without_year_is_not_incomplete(service):

@@ -313,8 +313,12 @@ def run_car_pipeline(
                 # didn't return is gone (or no longer matches our filters), so
                 # no per-listing checks are needed. Only after a clean run.
                 elif getattr(adapter, "full_catalog", False) and not adapter.page_errors:
-                    service.mark_unseen_gone(source_name, run_started)
-                    continue
+                    if service.mark_unseen_gone(source_name, display_name, run_started) is not None:
+                        continue
+                    failures.append(
+                        f"{city_key}/{source_name}: too many listings missing from a 'full' run; "
+                        "not marked gone (checking individually instead)"
+                    )
             except Exception as e:
                 logger.error(f"Error fetching cars from {source_name}: {e}")
                 failures.append(f"{city_key}/{source_name}: {e}")

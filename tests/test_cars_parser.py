@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from apartment_finder.cars.models import Car
 from apartment_finder.cars.dba import (
     DbaCarAdapter,
     parse_danish_int,
@@ -118,27 +119,120 @@ def _resp(status, text=""):
     return MagicMock(status_code=status, text=text)
 
 
+def _cars(*ids):
+    return [Car(source_id=f"dba_{i}", source_name="dba", city="Copenhagen",
+                url=f"https://www.dba.dk/mobility/item/{i}") for i in ids]
+
+
+@patch("apartment_finder.cars.dba.DbaCarAdapter._segment_total", side_effect=[3, 2])
+@patch("apartment_finder.cars.dba.FULL_PAGE_SIZE", 2)
+@patch("apartment_finder.cars.dba.parse_search_page")
 @patch("apartment_finder.cars.dba.time.sleep")
 @patch("apartment_finder.cars.dba.requests.get")
-def test_fetch_stops_on_block_and_dedupes(mock_get, _sleep):
-    page = FIXTURE.read_text()
-    # Page 2 repeats page 1 (paid placements repeat), page 3 is a bot wall
-    mock_get.side_effect = [_resp(200, page), _resp(200, page), _resp(202, "")]
-    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen", "dba": {"max_pages": 3}})
+def test_fetch_walks_both_segments_to_the_end(mock_get, _sleep, parse, _total):
+    mock_get.return_value = _resp(200, "<html>")
+    parse.side_effect = [
+        _cars(1, 2), _cars(3),        # dealers: full page, then a short last page
+        _cars(4, 5), _cars(4, 5),     # private: page 2 repeats page 1 (DBA wrapped)
+    ]
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen"})
 
     result = adapter.fetch_listings()
 
-    assert len(result) == 10
-    assert mock_get.call_count == 3
-    assert adapter.page_errors == ["page 3: HTTP 202"]
-    params = mock_get.call_args_list[0].kwargs["params"]
-    assert params == {"location": "0.200001", "sort": "PUBLISHED_DESC", "page": 1}
+    assert sorted(c.source_id for c in result) == ["dba_1", "dba_2", "dba_3", "dba_4", "dba_5"]
+    assert adapter.full_catalog is True
+    params = [call.kwargs["params"] for call in mock_get.call_args_list]
+    assert params[0] == {"location": "0.200001", "dealer_segment": "2", "page": 1}
+    assert params[2] == {"location": "0.200001", "dealer_segment": "3", "page": 1}
+    assert all("sort" not in p for p in params)  # robots.txt disallows sort=
+
+
+@patch("apartment_finder.cars.dba.FULL_PAGE_SIZE", 2)
+@patch("apartment_finder.cars.dba.parse_search_page")
+@patch("apartment_finder.cars.dba.time.sleep")
+@patch("apartment_finder.cars.dba.requests.get")
+def test_fetch_stops_on_block_and_is_not_full(mock_get, _sleep, parse):
+    mock_get.side_effect = [_resp(200, "<html>"), _resp(202, "")]
+    parse.return_value = _cars(1, 2)
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen"})
+
+    result = adapter.fetch_listings()
+
+    assert len(result) == 2
+    assert mock_get.call_count == 2  # private segment never requested
+    assert adapter.page_errors == ["dealer page 2: HTTP 202"]
+    assert adapter.full_catalog is False
+
+
+@patch("apartment_finder.cars.dba.DbaCarAdapter._segment_total", return_value=100)
+@patch("apartment_finder.cars.dba.FULL_PAGE_SIZE", 2)
+@patch("apartment_finder.cars.dba.parse_search_page")
+@patch("apartment_finder.cars.dba.time.sleep")
+@patch("apartment_finder.cars.dba.requests.get")
+def test_page_cap_means_not_full_catalog(mock_get, _sleep, parse, _total):
+    mock_get.return_value = _resp(200, "<html>")
+    parse.side_effect = [_cars(1, 2), _cars(3, 4), _cars(5, 6), _cars(7, 8)]
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen", "dba": {"max_pages": 2}})
+
+    adapter.fetch_listings()
+
+    assert adapter.page_errors == []
+    assert adapter.full_catalog is False  # both segments stopped at the cap
+
+
+@patch("apartment_finder.cars.dba.DbaCarAdapter._segment_total", return_value=10)
+@patch("apartment_finder.cars.dba.time.sleep")
+@patch("apartment_finder.cars.dba.requests.get")
+def test_real_fixture_page_parses_through_fetch(mock_get, _sleep, _total):
+    mock_get.return_value = _resp(200, FIXTURE.read_text())
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen"})
+    assert len(adapter.fetch_listings()) == 10  # 10-card page = short last page
+
+
+@patch("apartment_finder.cars.dba.DbaCarAdapter._segment_total", side_effect=[50, 2])
+@patch("apartment_finder.cars.dba.FULL_PAGE_SIZE", 2)
+@patch("apartment_finder.cars.dba.parse_search_page")
+@patch("apartment_finder.cars.dba.time.sleep")
+@patch("apartment_finder.cars.dba.requests.get")
+def test_early_end_below_dba_total_is_not_full(mock_get, _sleep, parse, _total):
+    # Page 2 is an error/consent page that parses to nothing, or a full page
+    # where one card failed to parse: looks like the end, but DBA says 50 cars
+    mock_get.return_value = _resp(200, "<html>")
+    parse.side_effect = [_cars(1, 2), [], _cars(3), ]
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen"})
+
+    adapter.fetch_listings()
+
+    assert adapter.page_errors == []
+    assert adapter.full_catalog is False
+
+
+@patch("apartment_finder.cars.dba.DbaCarAdapter._segment_total", return_value=None)
+@patch("apartment_finder.cars.dba.FULL_PAGE_SIZE", 2)
+@patch("apartment_finder.cars.dba.parse_search_page")
+@patch("apartment_finder.cars.dba.time.sleep")
+@patch("apartment_finder.cars.dba.requests.get")
+def test_unknown_total_is_not_full(mock_get, _sleep, parse, _total):
+    mock_get.return_value = _resp(200, "<html>")
+    parse.side_effect = [_cars(1), _cars(2)]
+    adapter = DbaCarAdapter({}, {"display_name": "Copenhagen"})
+    adapter.fetch_listings()
+    assert adapter.full_catalog is False
 
 
 @patch("apartment_finder.cars.dba.requests.get")
-def test_max_pages_is_capped_at_three(mock_get):
-    adapter = DbaCarAdapter({}, {"dba": {"max_pages": 10}})
-    assert adapter.max_pages == 3
+def test_segment_total_reads_match_count(mock_get):
+    mock_get.return_value = MagicMock(status_code=200)
+    mock_get.return_value.raise_for_status.return_value = None
+    mock_get.return_value.json.return_value = {"metadata": {"result_size": {"match_count": 1300}}}
+    assert DbaCarAdapter({}, {})._segment_total("3") == 1300
+    mock_get.return_value.json.return_value = {"metadata": {}}
+    assert DbaCarAdapter({}, {})._segment_total("3") is None
+
+
+def test_max_pages_is_capped_at_dba_limit():
+    adapter = DbaCarAdapter({}, {"dba": {"max_pages": 500}})
+    assert adapter.max_pages == 50
 
 
 def _ctx_response(status_code):

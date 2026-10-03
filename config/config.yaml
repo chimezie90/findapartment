@@ -134,7 +134,7 @@ cars:
       - findleasing
     dba:
       location: "0.200001"  # DBA region "København og omegn"
-      max_pages: 3          # ~50 cars per page, newest first
+      max_pages: 50         # per seller segment (dealers / private); 50 is DBA's limit
     findleasing:
       max_dealer_zip: 4999  # Dealers in Copenhagen + rest of Zealand (lease is picked up at the dealer)
 

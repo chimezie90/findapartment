@@ -56,7 +56,10 @@
         .control-check input { width: auto; }
         .control-check label { text-transform: none; font-size: 0.9rem; color: #333; }
 
-        .result-count { font-size: 0.9rem; color: #666; margin-bottom: 8px; }
+        .result-count { font-size: 0.9rem; color: #666; }
+        .result-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        .fetch-btn { font: inherit; font-size: 0.85rem; padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+        .fetch-btn:disabled { opacity: 0.6; cursor: progress; }
 
         .cars { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
         .car {
@@ -206,7 +209,10 @@
             </div>
         </details>
 
-        <div class="result-count" id="resultCount"></div>
+        <div class="result-bar">
+            <div class="result-count" id="resultCount"></div>
+            <button type="button" class="fetch-btn" id="fetchBtn">Fetch latest</button>
+        </div>
         <div class="cars" id="cars"></div>
         <button type="button" class="load-more" id="loadMore" hidden>Load more</button>
     </div>
@@ -405,6 +411,28 @@
         ['maxPrice', 'minYear', 'maxDown'].forEach(id =>
             $(id).addEventListener('input', () => onFilterChange(400)));
         $('loadMore').addEventListener('click', () => loadCars(true));
+
+        // Fetches the current tab's source on the server. Leasing walks the
+        // whole findleasing catalog, so it takes a few minutes.
+        $('fetchBtn').addEventListener('click', async () => {
+            const btn = $('fetchBtn');
+            const source = state.type === 'lease' ? 'findleasing' : 'dba';
+            btn.disabled = true;
+            btn.textContent = source === 'findleasing' ? 'Fetching… (2–4 min)' : 'Fetching…';
+            try {
+                const res = await fetch('/api/fetch-cars', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source }),
+                });
+                const data = await res.json().catch(() => ({}));
+                btn.textContent = data.success ? 'Updated' : (data.error || 'Fetch failed — see server log');
+                loadCars(false);
+            } catch (err) {
+                btn.textContent = 'Fetch failed: ' + err.message;
+            } finally {
+                setTimeout(() => { btn.disabled = false; btn.textContent = 'Fetch latest'; }, 4000);
+            }
+        });
 
         loadCars(false);
     </script>

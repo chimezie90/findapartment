@@ -1282,16 +1282,12 @@ def api_fetch():
             env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
         )
 
+        # Full output goes to the server log only: it can carry tracebacks,
+        # server paths and DB host details, and this endpoint is public
+        print(f"[fetch {city}] exit {result.returncode}\n{(result.stdout or '')[-3000:]}{(result.stderr or '')[-3000:]}", flush=True)
         if result.returncode == 0:
-            return jsonify({
-                'success': True,
-                'stdout': result.stdout[-2000:] if result.stdout else ''
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': result.stderr[-1000:] if result.stderr else 'Scraper failed'
-            })
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': 'Scraper failed; details are in the server log'})
 
     except subprocess.TimeoutExpired:
         return jsonify({
@@ -1299,10 +1295,72 @@ def api_fetch():
             'error': 'Fetch timed out after 8 minutes'
         }), 504
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        print(f"[fetch {city}] error: {e}", flush=True)
+        return jsonify({'success': False, 'error': 'Fetch failed; details are in the server log'}), 500
+
+
+CAR_SOURCES = ('dba', 'findleasing')
+# One fetch per source per window: these hit third-party sites, and the
+# endpoint is public.
+CAR_FETCH_COOLDOWN_MINUTES = 10
+# Lines worth showing a caller; full logs stay in the server log
+_SUMMARY_LINE = re.compile(r'(Fetched \d+|Stored \d+|Marked \d+|Liveness:|failed sources:)')
+
+
+def _claim_fetch_slot(name, cooldown_minutes):
+    """Atomically take the fetch slot for `name` if its cooldown has passed.
+
+    Kept in Postgres so the cooldown holds across autoscale instances and
+    restarts. Returns True if this caller may run the fetch.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO fetch_locks (name, started_at)
+               VALUES (%s, NOW() AT TIME ZONE 'UTC')
+               ON CONFLICT (name) DO UPDATE SET started_at = EXCLUDED.started_at
+               WHERE fetch_locks.started_at
+                     < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
+               RETURNING 1""",
+            (name, cooldown_minutes),
+        )
+        return cur.fetchone() is not None
+
+
+def _run_pipeline(args):
+    """Run apartment_finder.main on this server; returns (ok, summary lines)."""
+    project_root = Path(__file__).parent.parent.parent.parent
+    result = subprocess.run(
+        [sys.executable, '-m', 'apartment_finder.main', *args, '--no-email'],
+        capture_output=True,
+        text=True,
+        timeout=480,
+        cwd=str(project_root),
+        env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
+    )
+    output = (result.stdout or '') + (result.stderr or '')
+    print(f"[fetch {' '.join(args)}] exit {result.returncode}\n{output[-5000:]}", flush=True)
+    # Summaries only: raw output can carry tracebacks, paths and DB host details
+    summary = [line.split('| ')[-1][:300] for line in output.splitlines() if _SUMMARY_LINE.search(line)]
+    return result.returncode == 0, summary[-10:]
+
+
+@app.route('/api/fetch-cars', methods=['POST'])
+def api_fetch_cars():
+    """Run the car pipeline for one source on this server (so it writes to
+    the database the site reads). Body: {"source": "dba" | "findleasing"}."""
+    source = (request.get_json(silent=True) or {}).get('source')
+    if source not in CAR_SOURCES:
+        return jsonify({'success': False, 'error': f"source must be one of {', '.join(CAR_SOURCES)}"}), 400
+    if not _claim_fetch_slot(f'cars:{source}', CAR_FETCH_COOLDOWN_MINUTES):
+        return jsonify({'success': False,
+                        'error': f'{source} was fetched in the last {CAR_FETCH_COOLDOWN_MINUTES} min; try again later'}), 429
+    try:
+        ok, summary = _run_pipeline(['--cars', '--city', 'copenhagen', '--source', source])
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'error': 'Car fetch timed out after 8 minutes'}), 504
+    return jsonify({'success': ok, 'summary': summary,
+                    **({} if ok else {'error': 'Car fetch failed; details are in the server log'})}), (200 if ok else 502)
 
 
 # Initialize database on startup

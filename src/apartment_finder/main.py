@@ -11,6 +11,8 @@ from .adapters.base import SearchCriteria
 from .cars import CAR_ADAPTER_REGISTRY, get_car_adapter
 from .cars.service import CarListingService
 from .config import load_config
+from .homes import HOME_ADAPTER_REGISTRY, get_home_adapter
+from .homes.service import HomeListingService
 from .models.apartment import Apartment
 from .services.currency import CurrencyService
 from .services.deduplication import DeduplicationService
@@ -355,6 +357,102 @@ class CarPipelineError(RuntimeError):
     """At least one car source raised or returned no listings."""
 
 
+def run_home_pipeline(
+    config: dict, only_city: Optional[str] = None, only_source: Optional[str] = None
+) -> Dict[str, int]:
+    """
+    Fetch homes for sale for each city under config's `homes:` section,
+    store them, read detail pages for a capped number of not-yet-detailed
+    listings, mark listings missing from a clean full-catalog run as gone,
+    and expire old ones.
+
+    Returns:
+        {city display name: number of listings fetched}
+
+    Raises:
+        HomePipelineError: after storing and cleanup, if any source raised,
+        returned zero listings, or reported page errors.
+    """
+    home_cities = config.get("homes") or {}
+    if only_city and only_city not in home_cities:
+        raise ValueError(f"No homes config for city '{only_city}'. Configured: {list(home_cities)}")
+
+    service = HomeListingService()
+    run_started = datetime.utcnow()
+    fetched_by_city: Dict[str, int] = {}
+    failures: List[str] = []
+    requests_made = 0
+    source_cities: Dict[str, int] = {}
+    for city_config in home_cities.values():
+        for source_name in set(city_config.get("sources", [])):
+            source_cities[source_name] = source_cities.get(source_name, 0) + 1
+
+    for city_key, city_config in home_cities.items():
+        if only_city and city_key != only_city:
+            continue
+        display_name = city_config.get("display_name", city_key)
+        fetched_by_city[display_name] = 0
+        attempted = 0
+
+        for source_name in city_config.get("sources", []):
+            if only_source and source_name != only_source:
+                continue
+            if source_name not in HOME_ADAPTER_REGISTRY:
+                logger.warning(f"Unknown home source {source_name} for {city_key}")
+                failures.append(f"{city_key}/{source_name}: unknown source")
+                continue
+            attempted += 1
+            adapter = None
+            try:
+                source_config = config.get("sources", {}).get(source_name, {})
+                adapter = get_home_adapter(source_name, source_config, city_config)
+                homes = adapter.fetch_listings()
+                for error in adapter.page_errors:
+                    failures.append(f"{city_key}/{source_name}: {error}")
+                service.upsert_listings(homes)
+                fetched_by_city[display_name] += len(homes)
+                if service.last_skipped:
+                    # Those rows weren't re-seen; marking unseen homes gone would hide them
+                    failures.append(f"{city_key}/{source_name}: {service.last_skipped} listings could not be stored")
+                if not homes:
+                    failures.append(f"{city_key}/{source_name}: 0 listings (blocked or markup changed?)")
+                elif (getattr(adapter, "full_catalog", False) and not adapter.page_errors
+                      and not service.last_skipped and source_cities[source_name] == 1):
+                    # Whole catalog seen: anything missing is sold or withdrawn.
+                    # Scoped by source, so only safe while one city uses it.
+                    service.mark_unseen_gone(source_name, run_started)
+
+                if homes and hasattr(adapter, "fetch_details"):
+                    rows = service.get_listings_needing_details(source_name, adapter.max_detail_pages)
+                    if rows:
+                        service.record_details(adapter.fetch_details(rows))
+                        if adapter.detail_errors > len(rows) // 2 or adapter.rate_limited:
+                            failures.append(f"{city_key}/{source_name}: {adapter.detail_errors} of "
+                                            f"{len(rows)} detail pages failed")
+            except Exception as e:
+                # Full text to the log only: the summary is shown by a public endpoint
+                logger.exception(f"Error fetching homes from {source_name}: {e}")
+                failures.append(f"{city_key}/{source_name}: {type(e).__name__} (see log)")
+            finally:
+                requests_made += getattr(adapter, "request_count", 0) if adapter else 0
+
+        if attempted == 0:
+            failures.append(f"{city_key}: no home sources ran")
+
+    service.cleanup_old_listings()
+    logger.info(f"Homes run: {sum(fetched_by_city.values())} listings, {requests_made} requests")
+    if failures:
+        # Fail the cron run visibly (see run_car_pipeline)
+        raise HomePipelineError(
+            f"Fetched {fetched_by_city}; failed sources: " + "; ".join(failures)
+        )
+    return fetched_by_city
+
+
+class HomePipelineError(RuntimeError):
+    """At least one home source raised, returned no listings, or hit page errors."""
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -378,6 +476,11 @@ def main():
         "--cars",
         action="store_true",
         help="Run the car listings pipeline (config 'cars:' section) instead of apartments",
+    )
+    parser.add_argument(
+        "--homes",
+        action="store_true",
+        help="Run the homes-for-sale pipeline (config 'homes:' section) instead of apartments",
     )
     parser.add_argument(
         "--no-email",
@@ -439,6 +542,18 @@ def main():
             logger.exception(f"Car pipeline failed: {e}")
             sys.exit(1)
         print("\n=== Car Listings Results ===")
+        for city, count in fetched.items():
+            print(f"{city}: {count} listings fetched")
+        return
+
+    # Homes-for-sale pipeline: own config section and table; never sends email
+    if args.homes:
+        try:
+            fetched = run_home_pipeline(load_config(args.config), args.city, args.source)
+        except Exception as e:
+            logger.exception(f"Home pipeline failed: {e}")
+            sys.exit(1)
+        print("\n=== Homes For Sale Results ===")
         for city, count in fetched.items():
             print(f"{city}: {count} listings fetched")
         return

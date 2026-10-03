@@ -63,6 +63,37 @@
             gap: 5px;
         }
 
+        .control-group input[type="number"] {
+            width: 110px;
+            min-width: 0;
+        }
+
+        .control-check input[type="checkbox"] {
+            min-width: 0;
+            width: auto;
+            padding: 0;
+        }
+
+        .control-check {
+            flex-direction: row;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .listing.inactive {
+            opacity: 0.55;
+        }
+
+        .tag-gone {
+            background: #fde2e2;
+            color: #a12a2a;
+        }
+
+        .tag-new {
+            background: #dcfce7;
+            color: #166534;
+        }
+
         .control-group label {
             font-size: 0.8rem;
             font-weight: 600;
@@ -207,7 +238,8 @@
 
         .listing-meta {
             display: flex;
-            gap: 15px;
+            flex-wrap: wrap;
+            gap: 6px 15px;
             font-size: 0.9rem;
             color: #666;
         }
@@ -481,6 +513,10 @@
                 width: 100%;
             }
 
+            .control-group input[type="number"] {
+                width: 100%;
+            }
+
             .view-toggle {
                 margin-left: 0;
                 width: 100%;
@@ -595,13 +631,57 @@
             <div class="control-group">
                 <label>Sort by</label>
                 <select id="sortBy">
+                    <option value="date-desc" selected>Newest First</option>
                     <option value="score-desc">Best Match</option>
-                    <option value="date-desc">Newest First</option>
                     <option value="date-asc">Oldest First</option>
                     <option value="price-asc">Price: Low to High</option>
                     <option value="price-desc">Price: High to Low</option>
                     <option value="title-asc">Title: A-Z</option>
                 </select>
+            </div>
+
+            <div class="control-group">
+                <label>Added</label>
+                <select id="addedFilter">
+                    <option value="">Any time</option>
+                    <option value="1">Last 24 hours</option>
+                    <option value="3">Last 3 days</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Rooms</label>
+                <select id="roomsFilter">
+                    <option value="">Any</option>
+                    <option value="1">1+</option>
+                    <option value="2">2+</option>
+                    <option value="3">3+</option>
+                    <option value="4">4+</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Max price ($/mo)</label>
+                <input type="number" id="maxPriceFilter" min="0" step="100" placeholder="Any">
+            </div>
+
+            <div class="control-group">
+                <label>Min size (m²)</label>
+                <input type="number" id="minSizeFilter" min="0" step="5" placeholder="Any">
+            </div>
+
+            <div class="control-group">
+                <label>Must have</label>
+                <select id="amenityFilter">
+                    <option value="">Anything</option>
+                </select>
+            </div>
+
+            <div class="control-group control-check">
+                <input type="checkbox" id="showInactive">
+                <label for="showInactive">Show unavailable</label>
             </div>
 
             <div class="control-group">
@@ -709,6 +789,7 @@
                                 <span>${escapeHtml(item.city || '')}</span>
                                 <span>${price}</span>
                                 ${pickScoreHtml}
+                                ${inactiveTag(allListings.find(l => l.source_id === item.source_id) || {})}
                             </div>
                             <div class="pick-ratings">${ratings}</div>
                         </div>
@@ -829,6 +910,40 @@
                 sourceFilter.appendChild(option);
             });
             sourceFilter.value = prevSource;
+
+            const amenities = [...new Set(allListings.flatMap(l => parseAmenities(l.amenities)))].sort();
+            const amenityFilter = document.getElementById('amenityFilter');
+            const prevAmenity = amenityFilter.value;
+            while (amenityFilter.options.length > 1) amenityFilter.remove(1);
+            amenities.forEach(amenity => {
+                const option = document.createElement('option');
+                option.value = amenity;
+                option.textContent = amenity;
+                amenityFilter.appendChild(option);
+            });
+            amenityFilter.value = prevAmenity;
+        }
+
+        function parseAmenities(value) {
+            return value ? value.split(',').map(a => a.trim()).filter(Boolean) : [];
+        }
+
+        // Listings from before the active flag existed (or sample data) count as active
+        function isActive(listing) {
+            return listing.active !== false;
+        }
+
+        // 'gone' = the source confirmed it was rented/sold; otherwise it just
+        // hasn't shown up in recent scrapes (could be off the first results page).
+        function inactiveTag(listing) {
+            if (isActive(listing)) return '';
+            return listing.status === 'gone'
+                ? '<span class="tag tag-gone">No longer available</span>'
+                : '<span class="tag tag-gone">Not seen recently</span>';
+        }
+
+        function daysSince(dateStr) {
+            return (Date.now() - new Date(dateStr).getTime()) / 86400000;
         }
 
         function getFilteredListings() {
@@ -836,11 +951,25 @@
             const sourceFilter = document.getElementById('sourceFilter').value;
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
             const sortBy = document.getElementById('sortBy').value;
+            const addedDays = parseFloat(document.getElementById('addedFilter').value);
+            const minRooms = parseInt(document.getElementById('roomsFilter').value, 10);
+            const maxPrice = parseFloat(document.getElementById('maxPriceFilter').value);
+            const minSize = parseFloat(document.getElementById('minSizeFilter').value);
+            const amenity = document.getElementById('amenityFilter').value;
+            const showInactive = document.getElementById('showInactive').checked;
 
+            // Numeric filters exclude listings missing that field: an unknown
+            // size can't be shown to satisfy "at least 60 m²".
             let filtered = allListings.filter(listing => {
+                if (!showInactive && !isActive(listing)) return false;
                 if (cityFilter && listing.city !== cityFilter) return false;
                 if (sourceFilter && listing.source_name !== sourceFilter) return false;
                 if (searchTerm && !listing.title?.toLowerCase().includes(searchTerm)) return false;
+                if (addedDays && !(listing.first_seen_at && daysSince(listing.first_seen_at) <= addedDays)) return false;
+                if (minRooms && !(listing.bedrooms >= minRooms)) return false;
+                if (maxPrice && !(listing.price_usd && listing.price_usd <= maxPrice)) return false;
+                if (minSize && !(listing.size_sqm >= minSize)) return false;
+                if (amenity && !parseAmenities(listing.amenities).includes(amenity)) return false;
                 return true;
             });
 
@@ -957,8 +1086,13 @@
                            <span class="score-label-sm">${escapeHtml(sd.label)}</span>
                        </div>`
                     : `<div class="listing-score"><div class="score-circle-sm gray">--</div></div>`;
+                const facts = [
+                    listing.bedrooms ? `${listing.bedrooms} rooms` : '',
+                    listing.size_sqm ? `${Math.round(listing.size_sqm)} m²` : '',
+                ].filter(Boolean).join(' · ');
+                const isNew = listing.first_seen_at && daysSince(listing.first_seen_at) <= 1;
                 return `
-                <div class="listing" onclick="window.location='/listing?id=${encodeURIComponent(listing.source_id)}'" style="cursor:pointer">
+                <div class="listing ${isActive(listing) ? '' : 'inactive'}" onclick="window.location='/listing?id=${encodeURIComponent(listing.source_id)}'" style="cursor:pointer">
                     <div class="listing-thumbnail">
                         ${listing.thumbnail_url
                             ? `<img src="${escapeHtml(listing.thumbnail_url)}" alt="Listing photo" onerror="this.parentElement.innerHTML='<span class=\\'placeholder\\'>🏠</span>'">`
@@ -973,7 +1107,10 @@
                         <div class="listing-meta">
                             <span class="tag ${getCityClass(listing.city)}">${escapeHtml(listing.city || 'Unknown')}</span>
                             <span class="tag ${getSourceClass(listing.source_name)}">${escapeHtml(listing.source_name || 'Unknown')}</span>
-                            <span>${formatDate(listing.first_seen_at)}</span>
+                            ${inactiveTag(listing)}
+                            ${isActive(listing) && isNew ? '<span class="tag tag-new">New</span>' : ''}
+                            ${facts ? `<span>${facts}</span>` : ''}
+                            <span>Added ${formatDate(listing.first_seen_at)}</span>
                         </div>
                     </div>
                     <div>
@@ -1108,6 +1245,21 @@
             renderListings();
             updateStats();
             if (currentView === 'map') renderMap();
+        });
+
+        ['addedFilter', 'roomsFilter', 'amenityFilter', 'showInactive'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => {
+                renderListings();
+                updateStats();
+                if (currentView === 'map') renderMap();
+            });
+        });
+        ['maxPriceFilter', 'minSizeFilter'].forEach(id => {
+            document.getElementById(id).addEventListener('input', () => {
+                renderListings();
+                updateStats();
+                if (currentView === 'map') renderMap();
+            });
         });
 
         document.getElementById('listViewBtn').addEventListener('click', () => switchView('list'));

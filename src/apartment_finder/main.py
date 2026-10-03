@@ -3,7 +3,8 @@
 import argparse
 import logging
 import sys
-from typing import Dict, List
+from datetime import datetime
+from typing import Dict, List, Optional
 
 from .adapters import ADAPTER_REGISTRY, get_adapter
 from .adapters.base import SearchCriteria
@@ -16,6 +17,10 @@ from .services.scoring import ScoringService, ScoringWeights
 from .utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
+
+# Max listings liveness-checked per source per run (runtime is also capped by
+# adapters.base.LIVENESS_TIME_BUDGET_SECONDS).
+LIVENESS_BATCH_SIZE = 50
 
 
 class ApartmentFinder:
@@ -59,6 +64,7 @@ class ApartmentFinder:
             Dict mapping city names to lists of top apartments
         """
         logger.info("Starting apartment finder run")
+        run_started = datetime.utcnow()
         results_by_city: Dict[str, List[Apartment]] = {}
 
         # Process each city
@@ -77,6 +83,11 @@ class ApartmentFinder:
                 logger.error(f"Failed to process {city_key}: {e}")
                 results_by_city[display_name] = []
 
+            try:
+                self._check_liveness(city_config, only_source, run_started)
+            except Exception as e:
+                logger.error(f"Liveness check failed for {city_key}: {e}")
+
         # Send email if enabled and we have results
         if not skip_email and self.config.get("email", {}).get("enabled", True):
             self._send_email(results_by_city)
@@ -86,6 +97,34 @@ class ApartmentFinder:
 
         logger.info("Apartment finder run complete")
         return results_by_city
+
+    def _check_liveness(self, city_config: dict, only_source: Optional[str], seen_before: datetime) -> None:
+        """Ask each source whether listings this run didn't re-see are still live."""
+        for source_name in city_config.get("sources", []):
+            if source_name not in ADAPTER_REGISTRY or (only_source and source_name != only_source):
+                continue
+            try:
+                rows = self.dedup_service.get_listings_to_check(
+                    source_name, seen_before, LIVENESS_BATCH_SIZE
+                )
+                if not rows:
+                    continue
+                source_config = self.config.get("sources", {}).get(source_name, {})
+                adapter = get_adapter(source_name, source_config, city_config)
+                statuses = adapter.check_status([r["url"] for r in rows])
+                checked, gone, live = [], [], []
+                for row in rows:
+                    status = statuses.get(row["url"])
+                    if status is None:
+                        continue  # not checked this run; stays at the front of the queue
+                    checked.append(row["source_id"])
+                    if status == "gone":
+                        gone.append(row["source_id"])
+                    elif status == "active":
+                        live.append(row["source_id"])
+                self.dedup_service.record_status_check(checked, gone, live)
+            except Exception as e:
+                logger.error(f"Liveness check failed for {source_name}: {e}")
 
     def _process_city(self, city_key: str, city_config: dict, only_source: str = None) -> List[Apartment]:
         """Process a single city: fetch, convert, score, dedupe."""

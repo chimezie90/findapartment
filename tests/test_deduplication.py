@@ -187,3 +187,122 @@ class TestDeduplicationService:
         stats = service2.get_stats()
         assert stats["total_tracked"] == 1
         assert stats["total_sent"] == 1
+
+
+def _backdate(source_id: str, days: int) -> None:
+    with get_connection() as conn:
+        conn.cursor().execute(
+            "UPDATE seen_listings SET last_seen_at = %s WHERE source_id = %s",
+            (datetime.utcnow() - timedelta(days=days), source_id),
+        )
+
+
+def _row(source_id: str) -> dict:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM seen_listings WHERE source_id = %s", (source_id,))
+        return cur.fetchone()
+
+
+class TestListingMetadataAndLiveness:
+    """Metadata storage, liveness tracking, and FK-safe cleanup."""
+
+    def test_metadata_stored_on_insert(self, dedup_service, make_apartment):
+        apt = make_apartment("meta_apt")
+        apt.amenities = Amenities(dishwasher=True, elevator=True)
+        dedup_service.filter_new_listings([apt])
+
+        row = _row("meta_apt")
+        assert row["bedrooms"] == 2
+        assert row["bathrooms"] == 1.0
+        assert row["size_sqm"] == pytest.approx(74.3, abs=0.1)
+        assert row["amenities"] == "Dishwasher, Elevator"
+        assert row["status"] == "active"
+
+    def test_resighting_reactivates_and_updates_price(self, dedup_service, make_apartment):
+        apt = make_apartment("back_apt", price=3000.0)
+        dedup_service.filter_new_listings([apt])
+        dedup_service.record_status_check(["back_apt"], ["back_apt"])
+        assert _row("back_apt")["status"] == "gone"
+
+        apt.price_usd = 2800.0
+        dedup_service.filter_new_listings([apt])
+        row = _row("back_apt")
+        assert row["status"] == "active"
+        assert row["price_usd"] == 2800.0
+
+    def test_get_listings_to_check_skips_recently_seen(self, dedup_service, make_apartment):
+        dedup_service.filter_new_listings(
+            [make_apartment("stale_apt"), make_apartment("fresh_apt")]
+        )
+        _backdate("stale_apt", 2)
+        cutoff = datetime.utcnow() - timedelta(hours=1)
+
+        rows = dedup_service.get_listings_to_check("test", cutoff, 50)
+        assert [r["source_id"] for r in rows] == ["stale_apt"]
+
+    def test_get_listings_to_check_skips_gone_and_other_sources(self, dedup_service, make_apartment):
+        other = make_apartment("other_src")
+        other.source_name = "elsewhere"
+        dedup_service.filter_new_listings([make_apartment("gone_apt"), other])
+        dedup_service.record_status_check(["gone_apt"], ["gone_apt"])
+        cutoff = datetime.utcnow() + timedelta(seconds=1)
+
+        assert dedup_service.get_listings_to_check("test", cutoff, 50) == []
+
+    def test_get_listings_to_check_orders_least_recently_checked_first(self, dedup_service, make_apartment):
+        dedup_service.filter_new_listings([make_apartment(f"q{n}") for n in range(3)])
+        dedup_service.record_status_check(["q0"], [])
+        cutoff = datetime.utcnow() + timedelta(seconds=1)
+
+        rows = dedup_service.get_listings_to_check("test", cutoff, 2)
+        assert sorted(r["source_id"] for r in rows) == ["q1", "q2"]
+
+    def test_cleanup_keeps_listings_with_comments(self, dedup_service, make_apartment):
+        dedup_service.filter_new_listings(
+            [make_apartment("commented"), make_apartment("plain")]
+        )
+        dedup_service.filter_new_listings([make_apartment("rated")])
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO comments (listing_id, author, text) VALUES (%s, %s, %s)",
+                ("commented", "me", "nice"),
+            )
+            cur.execute(
+                "INSERT INTO ratings (listing_id, author, rating) VALUES (%s, %s, %s)",
+                ("rated", "me", "happy"),
+            )
+        for source_id in ("commented", "plain", "rated"):
+            _backdate(source_id, 31)
+
+        assert dedup_service.cleanup_old_listings(days=30) == 1
+        assert _row("commented") is not None
+        assert _row("rated") is not None
+        assert _row("plain") is None
+
+    def test_init_db_purges_boligportal_demo_rows_only(self, clean_db, make_apartment):
+        demo = make_apartment("boligportal_cph_001")
+        near_miss = make_apartment("boligportal_cph_006")
+        DeduplicationService().filter_new_listings([demo, near_miss])
+        with get_connection() as conn:
+            conn.cursor().execute(
+                "INSERT INTO comments (listing_id, author, text) VALUES (%s, %s, %s)",
+                ("boligportal_cph_001", "me", "fake"),
+            )
+
+        init_db()
+        init_db()  # idempotent
+
+        assert _row("boligportal_cph_001") is None
+        assert _row("boligportal_cph_006") is not None
+
+    def test_confirmed_live_counts_as_sighting(self, dedup_service, make_apartment):
+        dedup_service.filter_new_listings([make_apartment("live_apt")])
+        _backdate("live_apt", 5)
+
+        dedup_service.record_status_check(["live_apt"], [], ["live_apt"])
+        row = _row("live_apt")
+        assert row["status"] == "active"
+        assert row["last_seen_at"] > datetime.utcnow() - timedelta(minutes=1)
+        assert row["status_checked_at"] is not None

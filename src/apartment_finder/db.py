@@ -69,6 +69,20 @@ def init_db():
             ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS neighborhood TEXT
         """)
 
+        # Listing metadata (filterable in the UI) and liveness tracking.
+        # status: 'active' until a liveness check confirms the listing was
+        # removed/rented at the source, then 'gone'.
+        for column_def in (
+            "bedrooms INTEGER",
+            "bathrooms REAL",
+            "size_sqm REAL",
+            "amenities TEXT",
+            "posted_date TIMESTAMP",
+            "status TEXT NOT NULL DEFAULT 'active'",
+            "status_checked_at TIMESTAMP",
+        ):
+            cur.execute(f"ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS {column_def}")
+
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_city_source
             ON seen_listings(city, source_name)
@@ -108,3 +122,12 @@ def init_db():
                 FOREIGN KEY (listing_id) REFERENCES seen_listings(source_id)
             )
         """)
+
+        # One-time purge: the Boligportal adapter used to insert five
+        # hardcoded demo listings (boligportal_cph_001..005) whenever its
+        # scrape failed, and they showed up on the site as real listings.
+        # Idempotent; delete this block once it has run in prod.
+        demo_ids = [f"boligportal_cph_{n:03d}" for n in range(1, 6)]
+        cur.execute("DELETE FROM ratings WHERE listing_id = ANY(%s)", (demo_ids,))
+        cur.execute("DELETE FROM comments WHERE listing_id = ANY(%s)", (demo_ids,))
+        cur.execute("DELETE FROM seen_listings WHERE source_id = ANY(%s)", (demo_ids,))

@@ -71,6 +71,13 @@ def _init_app_db():
             load_seed_data(conn)
 
 
+# A listing not re-seen within this many days of its source's latest sighting
+# is shown as inactive, even if no liveness check has confirmed it gone.
+# Relative to the source (not now) so a broken scraper or missed cron doesn't
+# blank out every listing from that source.
+ACTIVE_WINDOW_DAYS = 3
+
+
 def get_listings():
     """Fetch all listings from the database."""
     try:
@@ -91,10 +98,19 @@ def get_listings():
                     longitude,
                     thumbnail_url,
                     description,
-                    neighborhood
+                    neighborhood,
+                    bedrooms,
+                    bathrooms,
+                    size_sqm,
+                    amenities,
+                    posted_date,
+                    status,
+                    (status = 'active'
+                     AND last_seen_at > MAX(last_seen_at) OVER (PARTITION BY source_name)
+                                        - make_interval(days => %s)) AS active
                 FROM seen_listings
                 ORDER BY first_seen_at DESC
-            """)
+            """, (ACTIVE_WINDOW_DAYS,))
             rows = cur.fetchall()
 
         if not rows:

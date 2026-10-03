@@ -80,19 +80,43 @@ class BalderAdapter(BaseAdapter):
             area_clause = " OR ".join(f"area='{area}'" for area in self.areas)
             filter_clauses.append(f"({area_clause})")
 
-        payload = {
-            "queries": [
-                {
-                    "indexUid": "leases",
-                    "filter": [" AND ".join(filter_clauses)],
-                    "attributesToHighlight": [],
-                    "limit": 100,
-                    "offset": 0,
-                    "sort": ["acquisition_date:asc"],
-                }
-            ]
+        result = self._query({
+            "filter": [" AND ".join(filter_clauses)],
+            "attributesToHighlight": [],
+            "limit": 100,
+            "offset": 0,
+            "sort": ["acquisition_date:asc"],
+        })
+        return result.get("hits", []) if result else []
+
+    def check_status(self, urls: List[str]) -> Dict[str, str]:
+        """
+        Balder's pages are client-rendered and return 200 even for rented or
+        nonexistent units, so check against the search index instead: any
+        tracked URL whose unit is no longer 'Ledig' (available) is gone, and
+        every other one is confirmed live.
+        """
+        result = self._query({
+            "filter": ["status = 'Ledig'"],
+            "attributesToRetrieve": ["slug"],
+            "limit": 1000,
+        })
+        hits = result.get("hits", []) if result else []
+        # Absence only means "rented" if we got the complete available set.
+        # No hits at all is far more likely an API change than reality, and a
+        # truncated page would make every unit past the cut look rented.
+        if not hits or result.get("estimatedTotalHits", 0) > len(hits):
+            return {}
+        live_slugs = {hit["slug"] for hit in hits if hit.get("slug")}
+        return {
+            url: "active" if url.rstrip("/").rsplit("/", 1)[-1] in live_slugs else "gone"
+            for url in urls
         }
 
+    def _query(self, query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Run one query against the 'leases' index. Returns the result (hits,
+        estimatedTotalHits, ...), or None on failure."""
+        payload = {"queries": [{"indexUid": "leases", **query}]}
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -101,15 +125,12 @@ class BalderAdapter(BaseAdapter):
         try:
             response = requests.post(SEARCH_URL, json=payload, headers=headers, timeout=30)
             response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch Balder listings: {e}")
-            return []
+            results = response.json().get("results", [])
+        except (requests.RequestException, ValueError) as e:
+            logger.error(f"Balder search request failed: {e}")
+            return None
 
-        data = response.json()
-        results = data.get("results", [])
-        if not results:
-            return []
-        return results[0].get("hits", [])
+        return results[0] if results else None
 
     def _normalize(self, hit: Dict[str, Any]) -> Optional[Apartment]:
         """Convert a raw Meilisearch hit into a normalized Apartment."""

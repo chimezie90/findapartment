@@ -94,12 +94,18 @@ command = "python -m apartment_finder.main --city sri_lanka"
 [[scheduled]]
 name = "fetch-cars-copenhagen-morning"
 cron = "35 8 * * *"
-command = "python -m apartment_finder.main --cars --city copenhagen --no-email"
+command = "python -m apartment_finder.main --cars --city copenhagen --source dba --no-email"
 
 [[scheduled]]
 name = "fetch-cars-copenhagen-evening"
 cron = "35 20 * * *"
-command = "python -m apartment_finder.main --cars --city copenhagen --no-email"
+command = "python -m apartment_finder.main --cars --city copenhagen --source dba --no-email"
+
+# findleasing.nu: once a day only (politeness; see cars/findleasing.py)
+[[scheduled]]
+name = "fetch-car-leases-copenhagen"
+cron = "40 6 * * *"
+command = "python -m apartment_finder.main --cars --city copenhagen --source findleasing --no-email"
 
 [workflows]
 runButton = "Project"

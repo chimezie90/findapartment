@@ -194,11 +194,41 @@ def test_run_car_pipeline_rejects_mostly_incomplete_listings(service):
     config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["dba"]}}}
 
     with patch("apartment_finder.main.get_car_adapter", return_value=adapter):
-        with pytest.raises(CarPipelineError, match="missing price or year"):
+        with pytest.raises(CarPipelineError, match="missing core fields"):
             run_car_pipeline(config, "copenhagen")
 
     assert _row("priced")["price_local"] == 65000.0  # not nulled out
     assert _row("ok") is None
+
+
+def test_full_catalog_source_marks_unseen_gone_without_checks(service):
+    from apartment_finder.main import run_car_pipeline
+
+    lease = dict(listing_type="lease", price_local=None, monthly_price_local=3000.0,
+                 term_months=36, source_name="findleasing")
+    service.upsert_listings([_car("still_there", **lease), _car("dropped", **lease)])
+    for sid in ("still_there", "dropped"):
+        _set(sid, last_seen_at=datetime.utcnow() - timedelta(days=1))
+    adapter = MagicMock(full_catalog=True, page_errors=[])
+    adapter.fetch_listings.return_value = [_car("still_there", **lease)]
+    config = {"cars": {"copenhagen": {"display_name": "Copenhagen", "sources": ["findleasing"]}}}
+
+    with patch("apartment_finder.main.get_car_adapter", return_value=adapter), \
+         patch("apartment_finder.main.CAR_ADAPTER_REGISTRY", {"findleasing": object}):
+        run_car_pipeline(config, "copenhagen")
+
+    assert _row("dropped")["status"] == "gone"
+    assert _row("still_there")["status"] == "active"
+    adapter.check_status.assert_not_called()
+
+
+def test_lease_without_year_is_not_incomplete(service):
+    from apartment_finder.main import _is_incomplete
+
+    lease = dict(listing_type="lease", price_local=None, monthly_price_local=3000.0)
+    assert not _is_incomplete(_car("new_order", year=None, term_months=36, **lease))
+    assert _is_incomplete(_car("no_term", term_months=None, **lease))
+    assert _is_incomplete(_car("buy_no_year", year=None))
 
 
 def test_run_car_pipeline_reports_partial_page_failures(service):
@@ -303,6 +333,33 @@ def test_api_cars_active_flag_is_relative_to_source(service, client):
     assert {c["source_id"]: c["active"] for c in data["cars"]} == {"recent": True, "stale": False}
 
 
+def test_api_cars_lease_fields_filters_and_total_sort(service, client):
+    lease = dict(listing_type="lease", price_local=None, seller_type="dealer")
+    service.upsert_listings([
+        # 2.000/mo x 12 + 60.000 down = 84.000 total
+        _car("cheap_monthly", monthly_price_local=2000.0, down_payment_local=60000,
+             term_months=12, lease_kind="financial", **lease),
+        # 2.500/mo x 12 + 0 down = 30.000 total
+        _car("cheap_total", monthly_price_local=2500.0, down_payment_local=0,
+             term_months=12, lease_kind="operational", km_per_year=15000, **lease),
+        _car("for_sale"),
+    ])
+
+    # Real monthly cost: 2.000 + 60.000/12 = 7.000 vs 2.500 + 0 = 2.500
+    data = client.get("/api/cars?type=lease&sort=effective-asc").get_json()
+    assert [c["source_id"] for c in data["cars"]] == ["cheap_total", "cheap_monthly"]
+    first = data["cars"][0]
+    assert (first["term_months"], first["km_per_year"], first["lease_kind"]) == (12, 15000, "operational")
+
+    ids = lambda q: [c["source_id"] for c in client.get(f"/api/cars?type=lease&{q}").get_json()["cars"]]
+    assert ids("max_down=10000") == ["cheap_total"]
+    service.upsert_listings([_car("dba_monthly", monthly_price_local=1500.0, **lease)])
+    assert "dba_monthly" not in ids("max_down=100000")  # unknown down payment fails the filter
+    assert ids("lease_kind=financial") == ["cheap_monthly"]
+    assert sorted(ids("max_price=2200")) == ["cheap_monthly", "dba_monthly"]  # monthly price for leases
+    assert client.get("/api/cars?type=buy").get_json()["total"] == 1
+
+
 def test_api_cars_lease_empty_and_bad_type(service, client):
     service.upsert_listings([_car("a")])
     assert client.get("/api/cars?type=lease").get_json()["total"] == 0
@@ -314,5 +371,5 @@ def test_api_cars_lease_empty_and_bad_type(service, client):
 def test_cars_page_served(client):
     response = client.get("/cars")
     assert response.status_code == 200
-    assert b"Lease sources are coming" in response.data
+    assert b"Max down payment" in response.data
     response.close()

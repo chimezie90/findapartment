@@ -94,6 +94,8 @@
             border: 1px solid #3498db; background: white; color: #3498db; border-radius: 6px; cursor: pointer;
         }
         .load-more[hidden] { display: none; }
+        .control-group[hidden] { display: none; }
+        .car-lease { font-size: 0.8rem; color: #555; margin-top: 2px; }
 
         @media (max-width: 480px) {
             .container { padding: 12px; }
@@ -111,7 +113,7 @@
                 <a href="/cars" class="active">Cars</a>
             </nav>
             <h1>Car Finder</h1>
-            <div class="stats" id="stats">Copenhagen · cars from DBA.dk</div>
+            <div class="stats" id="stats">Copenhagen · buy: DBA.dk · lease: findleasing.nu</div>
         </div>
     </header>
 
@@ -125,8 +127,20 @@
             <summary>Filters</summary>
             <div class="filter-grid">
                 <div class="control-group">
-                    <label for="maxPrice">Max price (kr.)</label>
+                    <label for="maxPrice" id="maxPriceLabel">Max price (kr.)</label>
                     <input type="number" id="maxPrice" min="0" step="5000" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group lease-only" hidden>
+                    <label for="maxDown">Max down payment (kr.)</label>
+                    <input type="number" id="maxDown" min="0" step="5000" inputmode="numeric" placeholder="Any">
+                </div>
+                <div class="control-group lease-only" hidden>
+                    <label for="leaseKind">Lease type</label>
+                    <select id="leaseKind">
+                        <option value="">Any</option>
+                        <option value="operational">Operational (service incl.)</option>
+                        <option value="financial">Financial</option>
+                    </select>
                 </div>
                 <div class="control-group">
                     <label for="minYear">Min year</label>
@@ -156,7 +170,7 @@
                         <option value="automatic">Automatic</option>
                     </select>
                 </div>
-                <div class="control-group">
+                <div class="control-group buy-only">
                     <label for="seller">Seller</label>
                     <select id="seller">
                         <option value="">Any</option>
@@ -182,6 +196,7 @@
                         <option value="price-desc">Price: high to low</option>
                         <option value="year-desc">Year: newest</option>
                         <option value="km-asc">Km: lowest</option>
+
                     </select>
                 </div>
                 <div class="control-group control-check">
@@ -231,7 +246,9 @@
         function buildQuery() {
             const params = new URLSearchParams({ type: state.type, limit: PAGE_SIZE, offset: state.offset });
             const fields = { max_price: 'maxPrice', min_year: 'minYear', max_km: 'maxKm', fuel: 'fuel',
-                             gearbox: 'gearbox', seller: 'seller', added_days: 'addedDays', sort: 'sort' };
+                             gearbox: 'gearbox', added_days: 'addedDays', sort: 'sort' };
+            if (state.type === 'lease') Object.assign(fields, { max_down: 'maxDown', lease_kind: 'leaseKind' });
+            else fields.seller = 'seller';
             for (const [param, id] of Object.entries(fields)) {
                 const value = $(id).value.trim();
                 if (value) params.set(param, value);
@@ -255,6 +272,7 @@
                 : (car.price_local != null
                     ? formatNumber(car.price_local) + ' kr.' + (car.vat_added ? ' <small title="Listed ex. VAT; 25% moms added">incl. moms</small>' : '')
                     : 'Price on request');
+            const lease = car.listing_type === 'lease' ? leaseDetails(car) : '';
             const tags = (car.is_promoted ? '<span class="tag tag-paid" title="Paid placement on the source site">Paid</span>' : '')
                        + (car.active ? '' : '<span class="tag tag-gone">Unavailable</span>');
             const thumb = car.thumbnail_url
@@ -267,15 +285,48 @@
                     ${car.variant ? `<div class="car-variant">${escapeHtml(car.variant)}</div>` : ''}
                     <div class="car-spec">${escapeHtml(spec)}</div>
                     <div class="car-price">${price}</div>
+                    ${lease ? `<div class="car-lease">${escapeHtml(lease)}</div>` : ''}
                     <div class="car-meta">${escapeHtml(meta)}</div>
                 </div>
             </a>`;
         }
 
+        const LEASE_KIND_LABELS = { financial: 'Financial lease', operational: 'Operational lease', 'monthly rental': 'Monthly rental' };
+
+        // A low monthly price often hides a big down payment: show the monthly
+        // cost with the down payment spread over the term
+        function leaseDetails(car) {
+            const effective = car.monthly_price_local != null && car.term_months
+                ? Math.round(car.monthly_price_local + (car.down_payment_local || 0) / car.term_months) : null;
+            return [
+                car.down_payment_local != null ? formatNumber(car.down_payment_local) + ' kr. down' : null,
+                car.term_months ? car.term_months + ' months' : null,
+                car.km_per_year ? formatNumber(car.km_per_year) + ' km/year' : null,
+                LEASE_KIND_LABELS[car.lease_kind] || car.lease_kind,
+                effective != null ? '≈ ' + formatNumber(effective) + ' kr./month incl. down payment' : null,
+            ].filter(Boolean).join(' · ');
+        }
+
+        // Added/removed rather than hidden: iOS Safari ignores `hidden` on <option>
+        const effectiveSortOption = new Option('Real monthly cost: lowest', 'effective-asc');
+
+        function applyTypeVisibility() {
+            const lease = state.type === 'lease';
+            document.querySelectorAll('.lease-only').forEach(el => { el.hidden = !lease; });
+            document.querySelectorAll('.buy-only').forEach(el => { el.hidden = lease; });
+            $('maxPriceLabel').textContent = lease ? 'Max per month (kr.)' : 'Max price (kr.)';
+            $('maxPrice').step = lease ? 500 : 5000;
+            if (lease && !effectiveSortOption.parentNode) $('sort').add(effectiveSortOption);
+            if (!lease && effectiveSortOption.parentNode) {
+                if ($('sort').value === 'effective-asc') $('sort').value = 'newest';
+                effectiveSortOption.remove();
+            }
+        }
+
         function renderEmpty() {
             if (state.type === 'lease') {
-                carsEl.innerHTML = `<div class="empty-state"><h2>Lease sources are coming</h2>
-                    <p>We only list cars for sale right now. Monthly lease offers will appear here soon.</p></div>`;
+                carsEl.innerHTML = `<div class="empty-state"><h2>No lease deals match these filters</h2>
+                    <p>Try a higher monthly price or down payment, or "Any time".</p></div>`;
             } else {
                 carsEl.innerHTML = `<div class="empty-state"><h2>No cars match these filters</h2>
                     <p>Try a higher max price, more km, or "Any time".</p></div>`;
@@ -343,12 +394,15 @@
                     b.classList.toggle('active', b === btn);
                     b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
                 });
+                // Prices mean different things per tab (total vs per month)
+                $('maxPrice').value = '';
+                applyTypeVisibility();
                 loadCars(false);
             });
         });
-        ['maxKm', 'fuel', 'gearbox', 'seller', 'addedDays', 'sort', 'showUnavailable'].forEach(id =>
+        ['maxKm', 'fuel', 'gearbox', 'seller', 'leaseKind', 'addedDays', 'sort', 'showUnavailable'].forEach(id =>
             $(id).addEventListener('change', () => onFilterChange(0)));
-        ['maxPrice', 'minYear'].forEach(id =>
+        ['maxPrice', 'minYear', 'maxDown'].forEach(id =>
             $(id).addEventListener('input', () => onFilterChange(400)));
         $('loadMore').addEventListener('click', () => loadCars(true));
 

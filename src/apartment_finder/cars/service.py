@@ -67,17 +67,20 @@ class CarListingService:
                 INSERT INTO car_listings
                 (source_id, source_name, city, listing_type, make, model,
                  variant, year, mileage_km, fuel, gearbox, price_local,
-                 currency, price_usd, monthly_price_local, location,
+                 currency, price_usd, monthly_price_local, down_payment_local,
+                 term_months, km_per_year, lease_kind, location,
                  seller_type, is_promoted, vat_added, url, thumbnail_url, listed_at,
                  first_seen_at, last_seen_at, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, 'active')
                 """,
                 (
                     car.source_id, car.source_name, car.city, car.listing_type,
                     car.make, car.model, car.variant, car.year, car.mileage_km,
                     car.fuel, car.gearbox, car.price_local, car.currency,
-                    car.price_usd, car.monthly_price_local, car.location,
+                    car.price_usd, car.monthly_price_local, car.down_payment_local,
+                    car.term_months, car.km_per_year, car.lease_kind, car.location,
                     car.seller_type, car.is_promoted, car.vat_added, car.url, car.thumbnail_url,
                     car.listed_at, now, now,
                 ),
@@ -95,6 +98,10 @@ class CarListingService:
                    price_local = %s,
                    price_usd = %s,
                    monthly_price_local = %s,
+                   down_payment_local = %s,
+                   term_months = %s,
+                   km_per_year = %s,
+                   lease_kind = %s,
                    is_promoted = %s,
                    vat_added = %s,
                    mileage_km = COALESCE(%s, mileage_km),
@@ -108,7 +115,8 @@ class CarListingService:
                WHERE source_id = %s""",
             (
                 now, car.listing_type, car.price_local, car.price_usd,
-                car.monthly_price_local,
+                car.monthly_price_local, car.down_payment_local, car.term_months,
+                car.km_per_year, car.lease_kind,
                 car.is_promoted, car.vat_added, car.mileage_km, car.thumbnail_url, car.variant,
                 car.fuel, car.gearbox, car.location, car.seller_type,
                 car.listed_at, car.source_id,
@@ -160,6 +168,19 @@ class CarListingService:
             f"Car liveness: checked {len(checked_ids)}, {len(gone_ids)} gone, "
             f"{len(live_ids or [])} confirmed live"
         )
+
+    def mark_unseen_gone(self, source_name: str, seen_before: datetime) -> int:
+        """Mark a source's active cars not seen since `seen_before` as gone."""
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """UPDATE car_listings SET status = 'gone', status_checked_at = %s
+                   WHERE source_name = %s AND status = 'active' AND last_seen_at < %s""",
+                (datetime.utcnow(), source_name, seen_before),
+            )
+            count = cur.rowcount
+        logger.info(f"Marked {count} {source_name} cars gone (not in the full catalog)")
+        return count
 
     def cleanup_old_listings(self, days: Optional[int] = None) -> int:
         """Delete cars not seen for `days` (default EXPIRY_DAYS). Returns count."""

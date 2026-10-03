@@ -235,9 +235,16 @@ class ApartmentFinder:
             self.dedup_service.mark_as_sent(all_sent)
 
 
-# A source run where more than this share of listings lack price or year is
+# A source run where more than this share of listings lack core fields is
 # treated as a markup change and not stored.
 INCOMPLETE_LISTING_RATIO = 0.3
+
+
+def _is_incomplete(car) -> bool:
+    if car.listing_type == "lease":
+        # New-car lease offers can lack a model year; price and term can't be missing
+        return car.monthly_price_local is None or car.term_months is None
+    return car.year is None or car.price_local is None
 
 
 def run_car_pipeline(
@@ -285,16 +292,13 @@ def run_car_pipeline(
                 cars = adapter.fetch_listings()
                 for error in getattr(adapter, "page_errors", []):
                     failures.append(f"{city_key}/{source_name}: {error}")
-                # Cards that parse but lack price/year mean the markup moved
-                # under us; storing them would null out good prices.
-                incomplete = sum(
-                    1 for car in cars
-                    if car.year is None or (car.price_local is None and car.monthly_price_local is None)
-                )
+                # Listings that parse but lack core fields mean the source
+                # changed under us; storing them would null out good data.
+                incomplete = sum(1 for car in cars if _is_incomplete(car))
                 if cars and incomplete > INCOMPLETE_LISTING_RATIO * len(cars):
                     failures.append(
                         f"{city_key}/{source_name}: {incomplete}/{len(cars)} listings missing "
-                        "price or year (markup changed?); not stored"
+                        "core fields (price/year, or monthly price/term for leases); not stored"
                     )
                     continue
                 for car in cars:
@@ -305,6 +309,12 @@ def run_car_pipeline(
                 fetched_by_city[display_name] += len(cars)
                 if not cars:
                     failures.append(f"{city_key}/{source_name}: 0 listings (blocked or markup changed?)")
+                # A source that returns its whole catalog each run: anything it
+                # didn't return is gone (or no longer matches our filters), so
+                # no per-listing checks are needed. Only after a clean run.
+                elif getattr(adapter, "full_catalog", False) and not adapter.page_errors:
+                    service.mark_unseen_gone(source_name, run_started)
+                    continue
             except Exception as e:
                 logger.error(f"Error fetching cars from {source_name}: {e}")
                 failures.append(f"{city_key}/{source_name}: {e}")

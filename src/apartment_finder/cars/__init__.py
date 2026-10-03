@@ -29,4 +29,4 @@ def get_car_adapter(source_name: str, config: Dict[str, Any], city_config: Dict[
     return adapter_class(config, city_config)
 
 
-from . import dba  # noqa: E402,F401  (registers the adapter)
+from . import dba, findleasing  # noqa: E402,F401  (registers the adapters)

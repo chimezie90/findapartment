@@ -1,0 +1,146 @@
+{
+ "count": 5,
+ "next": null,
+ "results": [
+  {
+   "id": 243545,
+   "make": "Audi",
+   "model": "Q5",
+   "header": "50 TFSi e S-line quattro S-tr. 5d",
+   "funding": "Finansiel",
+   "year": 2024,
+   "period": "12",
+   "price_monthly": 2737,
+   "down_payment": 50000,
+   "mileage": 110000,
+   "kilometers": null,
+   "fuel_type": "Hybrid/Benzin",
+   "gear_type": "Automatisk",
+   "ownership": 2,
+   "active": true,
+   "deleted": false,
+   "pub_date": "2026-10-02T17:17:46+02:00",
+   "thumbnail_image": "https://acdn.findleasing.nu/media/listing_images/243545/wnbujzn8vudbaor38p.jpeg?class=thumb",
+   "listing_url": "https://www.findleasing.nu/audi-leasing/audi-q5-50-tfsi-e-s-line-quattro-s-tr-5d/243545/",
+   "dealer": {
+    "name": "GranTurismo Cars A/S",
+    "address": {
+     "city": "Albertslund",
+     "zip_code": "2620"
+    }
+   }
+  },
+  {
+   "id": 243467,
+   "make": "Peugeot",
+   "model": "Expert",
+   "header": "2,0 BlueHDi 144 L3 Premium Van",
+   "funding": "Operationel",
+   "year": 2022,
+   "period": "60",
+   "price_monthly": 2181,
+   "down_payment": 35016,
+   "mileage": 52000,
+   "kilometers": 50000,
+   "fuel_type": "Diesel",
+   "gear_type": "Manuel",
+   "ownership": 2,
+   "active": true,
+   "deleted": false,
+   "pub_date": "2026-09-30T14:19:12+02:00",
+   "thumbnail_image": "https://acdn.findleasing.nu/media/listing_images/243467/bo1wm06dtvl2775pqk.webp?class=thumb",
+   "listing_url": "https://www.findleasing.nu/peugeot-leasing/peugeot-expert-20-bluehdi-144-l3-premium-van/243467/",
+   "dealer": {
+    "name": "Autocompany ApS",
+    "address": {
+     "city": "Hillerød",
+     "zip_code": "3400"
+    }
+   }
+  },
+  {
+   "id": 243518,
+   "make": "Mercedes",
+   "model": "E300 de",
+   "header": "2,0 stc. aut. 5d",
+   "funding": "Finansiel",
+   "year": 2024,
+   "period": "12",
+   "price_monthly": 3652,
+   "down_payment": 62500,
+   "mileage": 128000,
+   "kilometers": 20000,
+   "fuel_type": "Hybrid/Diesel",
+   "gear_type": "Automatisk",
+   "ownership": 2,
+   "active": true,
+   "deleted": false,
+   "pub_date": "2026-10-01T16:16:11+02:00",
+   "thumbnail_image": "https://acdn.findleasing.nu/media/listing_images/243518/ld8a7u0j680nivvjbn.jpeg?class=thumb",
+   "listing_url": "https://www.findleasing.nu/mercedes-leasing/mercedes-e-series-20-stc-aut-5d/243518/",
+   "dealer": {
+    "name": "Forza Leasing Frederikssund",
+    "address": {
+     "city": "Frederikssund",
+     "zip_code": "3600"
+    }
+   }
+  },
+  {
+   "id": 243464,
+   "make": "Opel",
+   "model": "Combo",
+   "header": "1,5 D 102 Enjoy L2V2",
+   "funding": "Finansiel",
+   "year": 2022,
+   "period": "60",
+   "price_monthly": 2023,
+   "down_payment": 28750,
+   "mileage": 122000,
+   "kilometers": 50000,
+   "fuel_type": "Diesel",
+   "gear_type": "Manuel",
+   "ownership": 2,
+   "active": true,
+   "deleted": false,
+   "pub_date": "2026-09-30T13:19:13+02:00",
+   "thumbnail_image": "https://acdn.findleasing.nu/media/listing_images/243464/63yqsr10l2i2pby0x9.webp?class=thumb",
+   "listing_url": "https://www.findleasing.nu/opel-leasing/opel-combo-15-d-102-enjoy-l2v2/243464/",
+   "dealer": {
+    "name": "Autocompany ApS",
+    "address": {
+     "city": "Hillerød",
+     "zip_code": "3400"
+    }
+   }
+  },
+  {
+   "id": 243546,
+   "make": "BMW",
+   "model": "X5",
+   "header": "3,0 xDrive45e M-Sport aut. 5d",
+   "funding": "Finansiel",
+   "year": 2022,
+   "period": "12",
+   "price_monthly": 4991,
+   "down_payment": 73750,
+   "mileage": 130000,
+   "kilometers": null,
+   "fuel_type": "Hybrid/Benzin",
+   "gear_type": "Automatisk",
+   "ownership": 2,
+   "active": true,
+   "deleted": false,
+   "pub_date": "2026-10-03T12:19:12+02:00",
+   "thumbnail_image": "https://acdn.findleasing.nu/media/listing_images/243546/5dxy4ddu663m4jvdts.jpeg?class=thumb",
+   "listing_url": "https://www.findleasing.nu/bmw-leasing/bmw-x-series-30-xdrive45e-m-sport-aut-5d/243546/",
+   "dealer": {
+    "name": "Mondrup Biler ApS",
+    "address": {
+     "city": "Randers SV",
+     "zip_code": "8940"
+    }
+   }
+  }
+ ]
+}

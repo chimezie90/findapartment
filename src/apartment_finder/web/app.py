@@ -12,6 +12,8 @@ from flask import Flask, jsonify, send_from_directory, request
 import requests as http_requests
 
 from ..db import get_connection, init_db
+from ..homes import costs as home_costs
+from ..services.currency import CurrencyService
 
 app = Flask(__name__, static_folder='static')
 
@@ -304,6 +306,200 @@ def api_cars():
         print(f"Database error: {e}")
         return jsonify({'error': 'Could not load car listings'}), 500
     result.update({'limit': limit, 'offset': offset})
+    return jsonify(result)
+
+
+@app.route('/homes')
+def homes_page():
+    """Serve the homes-for-sale page."""
+    return send_from_directory('static', 'homes.html')
+
+
+# Each clean homes run walks the whole catalog and marks unseen homes gone.
+# If runs fail partway, rows not re-seen within this window of the source's
+# latest sighting show as unavailable.
+HOME_ACTIVE_WINDOW_DAYS = 3
+HOME_PAGE_SIZE = 40
+HOME_TYPES = ('flat', 'terraced', 'villa', 'villa_flat')
+ENERGY_LABELS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
+HOME_SORTS = {
+    'newest': 'added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+    'price-asc': 'price_dkk ASC, added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+    'price-desc': 'price_dkk DESC, added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+    'ppsqm-asc': 'price_per_sqm ASC NULLS LAST, added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+    'monthly-asc': 'est_monthly_cash_dkk ASC NULLS LAST, added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+    # Biggest drop since first seen, as a share of the first price
+    'drop-desc': 'drop_pct DESC NULLS LAST, added_at DESC NULLS LAST, first_seen_at DESC, source_id',
+}
+
+# USD per DKK from the app's CurrencyService (Frankfurter, else its fallback
+# rate). Cached here so page views don't wait on Frankfurter more than once
+# per window, even while Frankfurter is down.
+_USD_RATE_TTL_SECONDS = 6 * 3600
+_usd_rate_cache = {'rate': None, 'at': 0.0}
+
+
+def _usd_per_dkk():
+    now = time.time()
+    if _usd_rate_cache['rate'] is None or now - _usd_rate_cache['at'] > _USD_RATE_TTL_SECONDS:
+        rate = None
+        try:
+            # convert_to_usd rounds to cents, so convert a large amount
+            usd = CurrencyService().convert_to_usd(1_000_000, 'DKK')
+            rate = usd / 1_000_000 if usd else None
+        except Exception as e:
+            print(f"USD rate lookup failed: {e}")
+        if not rate:
+            rate = CurrencyService.FALLBACK_RATES['DKK_USD']
+        _usd_rate_cache.update(rate=float(rate), at=now)
+    return _usd_rate_cache['rate']
+
+
+def _home_money(row):
+    """Derived money figures for one home row (DKK unless named _usd)."""
+    price, sqm = row['price_dkk'], row.get('sqm')
+    per_sqm = round(price / sqm) if sqm else None
+    average = home_costs.municipality_average_per_sqm(row.get('municipality'), row['property_type'])
+    first = row.get('first_price_dkk') or price
+    drop = first - price if first > price else 0
+    return {
+        'sqft': round(sqm * home_costs.SQFT_PER_SQM) if sqm else None,
+        'price_per_sqm': per_sqm,
+        'municipality_avg_per_sqm': average,
+        'vs_municipality_pct': round((per_sqm / average - 1) * 100, 1) if per_sqm and average else None,
+        'monthly': home_costs.estimate_monthly_cost(price, row.get('monthly_owner_expenses_dkk'),
+                                                    row.get('property_type')),
+        'cash_needed': home_costs.cash_needed(price),
+        'price_dropped': drop > 0,
+        'price_drop_dkk': drop,
+        'price_drop_pct': round(drop / first * 100, 1) if drop else 0,
+    }
+
+
+def get_homes(max_price=None, min_sqm=None, max_sqm=None, min_rooms=None,
+              property_type=None, municipality=None, postcode=None,
+              max_price_per_sqm=None, energy_label=None, added_days=None,
+              show_unavailable=False, sort='newest', limit=HOME_PAGE_SIZE, offset=0):
+    """Filtered, sorted page of homes for sale plus the total match count."""
+    conditions, params = [], [HOME_ACTIVE_WINDOW_DAYS]
+    if not show_unavailable:
+        conditions.append('active')
+    for clause, value in (('price_dkk <= %s', max_price), ('sqm >= %s', min_sqm),
+                          ('sqm <= %s', max_sqm), ('rooms >= %s', min_rooms),
+                          ('price_per_sqm <= %s', max_price_per_sqm),
+                          ('property_type = %s', property_type),
+                          ('municipality = %s', municipality),
+                          ('postcode = %s', postcode)):
+        if value is not None:
+            conditions.append(clause)
+            params.append(value)
+    if energy_label:
+        # "C" means C or better; homes with no known label don't match
+        conditions.append('UPPER(LEFT(energy_label, 1)) = ANY(%s)')
+        params.append(list(ENERGY_LABELS[:ENERGY_LABELS.index(energy_label) + 1]))
+    if added_days is not None:
+        conditions.append("added_at > (NOW() AT TIME ZONE 'UTC') - make_interval(days => %s)")
+        params.append(added_days)
+    where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
+    order = HOME_SORTS.get(sort, HOME_SORTS['newest'])
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            WITH h AS (
+                SELECT source_id, source_name, url, address, street, postcode, city,
+                       municipality, property_type, sqm, rooms, year_built, price_dkk,
+                       first_price_dkk, previous_price_dkk, price_changed_at,
+                       monthly_owner_expenses_dkk, est_monthly_cash_dkk, energy_label,
+                       latitude, longitude, is_external, broker, headline, thumbnail_url,
+                       listed_at, first_seen_at, last_seen_at, status, under_offer,
+                       -- Homes from a source's first import were already on the
+                       -- market; first_seen_at would make them all look new
+                       COALESCE(listed_at, CASE WHEN first_seen_at >
+                           MIN(first_seen_at) OVER (PARTITION BY source_name) + INTERVAL '12 hours'
+                           THEN first_seen_at END) AS added_at,
+                       price_dkk::float / NULLIF(sqm, 0) AS price_per_sqm,
+                       (first_price_dkk - price_dkk)::float / NULLIF(first_price_dkk, 0) AS drop_pct,
+                       (status = 'active'
+                        AND last_seen_at > MAX(last_seen_at) OVER (PARTITION BY source_name)
+                                           - make_interval(days => %s)) AS active
+                FROM home_listings
+            )
+            SELECT *, COUNT(*) OVER () AS total_count FROM h
+            {where}
+            ORDER BY {order}
+            LIMIT %s OFFSET %s
+        """, (*params, limit, offset))
+        rows = [dict(row) for row in cur.fetchall()]
+
+        cur.execute("""SELECT DISTINCT municipality FROM home_listings
+                       WHERE municipality IS NOT NULL ORDER BY municipality""")
+        municipalities = [row['municipality'] for row in cur.fetchall()]
+        cur.execute("SELECT MAX(last_seen_at) AS as_of FROM home_listings")
+        as_of = cur.fetchone()['as_of']
+
+    total = rows[0]['total_count'] if rows else 0
+    for row in rows:
+        for key in ('total_count', 'drop_pct', 'price_per_sqm'):
+            row.pop(key, None)
+        row.update(_home_money(row))
+        for key in ('listed_at', 'first_seen_at', 'last_seen_at', 'added_at', 'price_changed_at'):
+            if row.get(key):
+                row[key] = row[key].isoformat() + 'Z'
+    return {'homes': rows, 'total': total, 'municipalities': municipalities,
+            'data_as_of': as_of.isoformat() + 'Z' if as_of else None}
+
+
+@app.route('/api/homes')
+def api_homes():
+    """Homes for sale, filtered server-side so phones only download one page.
+
+    Query params: max_price (DKK), min_sqm, max_sqm, min_rooms,
+    type (flat|terraced|villa|villa_flat), municipality, postcode,
+    max_ppsqm (DKK per m2), energy (A-G: that label or better), added_days,
+    show_unavailable (1), sort (newest|price-asc|price-desc|ppsqm-asc|
+    monthly-asc|drop-desc), limit, offset.
+
+    Also returns usd_per_dkk and the cost-estimate assumptions.
+    """
+    property_type = request.args.get('type') or None
+    if property_type is not None and property_type not in HOME_TYPES:
+        return jsonify({'error': f"type must be one of {', '.join(HOME_TYPES)}"}), 400
+    energy = (request.args.get('energy') or '').strip().upper() or None
+    if energy is not None and energy not in ENERGY_LABELS:
+        return jsonify({'error': 'energy must be a letter A-G'}), 400
+    postcode = (request.args.get('postcode') or '').strip() or None
+    if postcode is not None and not re.fullmatch(r'\d{4}', postcode):
+        return jsonify({'error': 'postcode must be 4 digits'}), 400
+    limit = _int_arg('limit', minimum=1, maximum=200) or HOME_PAGE_SIZE
+    offset = _int_arg('offset', maximum=1_000_000) or 0
+    try:
+        result = get_homes(
+            max_price=_int_arg('max_price', maximum=1_000_000_000),
+            min_sqm=_int_arg('min_sqm', maximum=100_000),
+            max_sqm=_int_arg('max_sqm', maximum=100_000),
+            min_rooms=_int_arg('min_rooms', maximum=100),
+            property_type=property_type,
+            municipality=(request.args.get('municipality') or '').strip()[:100] or None,
+            postcode=postcode,
+            max_price_per_sqm=_int_arg('max_ppsqm', maximum=10_000_000),
+            energy_label=energy,
+            added_days=_int_arg('added_days', minimum=1, maximum=3650),
+            show_unavailable=request.args.get('show_unavailable') == '1',
+            sort=request.args.get('sort', 'newest'),
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as e:
+        print(f"Database error: {e}")
+        return jsonify({'error': 'Could not load homes'}), 500
+    result.update({
+        'limit': limit,
+        'offset': offset,
+        'usd_per_dkk': _usd_per_dkk(),
+        'sqft_per_sqm': home_costs.SQFT_PER_SQM,
+        'assumptions': home_costs.assumptions(),
+    })
     return jsonify(result)
 
 
@@ -1304,7 +1500,7 @@ CAR_SOURCES = ('dba', 'findleasing')
 # endpoint is public.
 CAR_FETCH_COOLDOWN_MINUTES = 10
 # Lines worth showing a caller; full logs stay in the server log
-_SUMMARY_LINE = re.compile(r'(Fetched \d+|Stored \d+|Marked \d+|Liveness:|failed sources:)')
+_SUMMARY_LINE = re.compile(r'(Fetched \d+|Stored \d+|Marked \d+|Liveness:|Homes run:|failed sources:)')
 
 
 def _claim_fetch_slot(name, cooldown_minutes):
@@ -1327,14 +1523,14 @@ def _claim_fetch_slot(name, cooldown_minutes):
         return cur.fetchone() is not None
 
 
-def _run_pipeline(args):
+def _run_pipeline(args, timeout=480):
     """Run apartment_finder.main on this server; returns (ok, summary lines)."""
     project_root = Path(__file__).parent.parent.parent.parent
     result = subprocess.run(
         [sys.executable, '-m', 'apartment_finder.main', *args, '--no-email'],
         capture_output=True,
         text=True,
-        timeout=480,
+        timeout=timeout,
         cwd=str(project_root),
         env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
     )
@@ -1363,6 +1559,33 @@ def api_fetch_cars():
                     **({} if ok else {'error': 'Car fetch failed; details are in the server log'})}), (200 if ok else 502)
 
 
+# A full homes run is ~400 catalog pages plus 40 detail pages, 1.5 s apart,
+# and took 33 min on 3 Oct 2026. So it gets a long timeout, and a cooldown
+# longer than one run. A caller must allow for the long request too.
+# Once a day at most: a full run is ~400 home.dk requests and the endpoint is public
+HOME_FETCH_COOLDOWN_MINUTES = 20 * 60
+HOME_FETCH_TIMEOUT_SECONDS = 3000
+
+
+@app.route('/api/fetch-homes', methods=['POST'])
+def api_fetch_homes():
+    """Run the homes pipeline (home.dk, Copenhagen area) on this server."""
+    try:
+        if not _claim_fetch_slot('homes:homedk', HOME_FETCH_COOLDOWN_MINUTES):
+            return jsonify({'success': False,
+                            'error': 'Homes were fetched in the last 20 hours; try again later'}), 429
+        ok, summary = _run_pipeline(['--homes', '--city', 'copenhagen', '--source', 'homedk'],
+                                    timeout=HOME_FETCH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False,
+                        'error': f'Homes fetch timed out after {HOME_FETCH_TIMEOUT_SECONDS // 60} minutes'}), 504
+    except Exception as e:
+        print(f"[fetch homes] error: {type(e).__name__}: {e}", flush=True)
+        return jsonify({'success': False, 'error': 'Homes fetch failed; details are in the server log'}), 500
+    return jsonify({'success': ok, 'summary': summary,
+                    **({} if ok else {'error': 'Homes fetch failed; details are in the server log'})}), (200 if ok else 502)
+
+
 # Initialize database on startup
 with app.app_context():
     _init_app_db()
@@ -1372,4 +1595,6 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     _init_app_db()
     print(f"Starting server at http://0.0.0.0:{port}")
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Debug mode serves Werkzeug's interactive debugger on errors: never in
+    # production (the Replit deployment runs this module directly)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG') == '1')

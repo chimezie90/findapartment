@@ -138,6 +138,36 @@ cars:
     findleasing:
       max_dealer_zip: 4999  # Dealers in Copenhagen + rest of Zealand (lease is picked up at the dealer)
 
+# Homes for sale ("Buy a home" section). Run with: python -m apartment_finder.main --homes --city copenhagen
+# Each run walks the whole catalog for these municipalities (~400 pages of 12
+# listings, ~35 min at 1.5 s between requests), so unseen listings can be
+# marked sold/withdrawn.
+homes:
+  copenhagen:
+    display_name: "Copenhagen"
+    sources:
+      - homedk
+    homedk:
+      region: region-hovedstaden
+      categories: [lejlighed, raekkehus, villa, villalejlighed]  # never andelsbolig/fritidsbolig
+      municipalities:   # home.dk slugs, verified 2026-10-03
+        - koebenhavn-kommune
+        - frederiksberg-kommune
+        - gentofte-kommune
+        - gladsaxe-kommune
+        - lyngby-taarbaek-kommune
+        - herlev-kommune
+        - roedovre-kommune
+        - hvidovre-kommune
+        - broendby-kommune
+        - glostrup-kommune
+        - ballerup-kommune
+        - taarnby-kommune
+        - dragoer-kommune
+        - albertslund-kommune
+      max_pages: 450         # catalog pages per run (hard cap 600)
+      max_detail_pages: 40   # detail pages per run, home.dk's own new listings only
+
 # Email delivery settings
 email:
   enabled: true

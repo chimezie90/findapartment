@@ -175,6 +175,67 @@ def init_db():
             ON car_listings(last_seen_at)
         """)
 
+        # Homes for sale (the "Buy a home" section). Prices in DKK.
+        # first_price_dkk is the price when first seen; previous_price_dkk
+        # and price_changed_at record the latest change, so price drops show.
+        # est_monthly_cash_dkk is homes.costs.estimate_monthly_cost()'s
+        # cash_out, refreshed on every upsert, so the API can sort by it.
+        # details_checked_at: when the source's detail page was last read
+        # (home.dk's own listings only; external ones are never fetched).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS home_listings (
+                source_id TEXT PRIMARY KEY,
+                source_name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                address TEXT NOT NULL,
+                street TEXT,
+                postcode TEXT,
+                city TEXT,
+                municipality TEXT,
+                property_type TEXT NOT NULL,
+                sqm INTEGER,
+                rooms INTEGER,
+                year_built INTEGER,
+                price_dkk BIGINT NOT NULL,
+                first_price_dkk BIGINT,
+                previous_price_dkk BIGINT,
+                price_changed_at TIMESTAMP,
+                monthly_owner_expenses_dkk INTEGER,
+                est_monthly_cash_dkk INTEGER,
+                energy_label TEXT,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                is_external BOOLEAN NOT NULL DEFAULT FALSE,
+                broker TEXT,
+                headline TEXT,
+                thumbnail_url TEXT,
+                listed_at TIMESTAMP,
+                details_checked_at TIMESTAMP,
+                first_seen_at TIMESTAMP NOT NULL,
+                last_seen_at TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                status_checked_at TIMESTAMP
+            )
+        """)
+        # missed_runs: clean full-catalog runs in a row that didn't see the
+        # home. Marked gone at 2, so one paging hiccup doesn't hide it.
+        cur.execute(
+            "ALTER TABLE home_listings ADD COLUMN IF NOT EXISTS missed_runs INTEGER NOT NULL DEFAULT 0"
+        )
+        # under_offer: sold subject to conditions (solgt med forbehold), per
+        # the detail page; still listed, so still active.
+        cur.execute(
+            "ALTER TABLE home_listings ADD COLUMN IF NOT EXISTS under_offer BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_home_source_status
+            ON home_listings(source_name, status)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_home_last_seen
+            ON home_listings(last_seen_at)
+        """)
+
         # Cooldowns for the public fetch endpoints, shared by every app
         # instance (autoscale runs several, so in-memory state isn't enough)
         cur.execute("""

@@ -8,11 +8,14 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import psycopg2
+from psycopg2.extras import execute_values
 
 from ..db import get_connection, init_db
 from .models import Car
 
 logger = logging.getLogger(__name__)
+
+UPSERT_CHUNK_SIZE = 500
 
 
 class CarListingService:
@@ -34,26 +37,95 @@ class CarListingService:
         if not cars:
             return []
 
-        new_cars = []
+        # Last copy wins if a source returned the same listing twice
+        cars = list({car.source_id: car for car in cars}.values())
+        new_ids = set()
         skipped = 0
         now = datetime.utcnow()
         with get_connection() as conn:
             cur = conn.cursor()
-            for car in cars:
-                # One bad row (e.g. an absurd mileage overflowing INTEGER) must
-                # not roll back the whole batch run after run.
-                cur.execute("SAVEPOINT car_row")
+            for start in range(0, len(cars), UPSERT_CHUNK_SIZE):
+                chunk = cars[start:start + UPSERT_CHUNK_SIZE]
+                # One statement per chunk: per-row queries cost minutes on a
+                # remote database (a DBA run timed out at 8 min on Replit)
+                cur.execute("SAVEPOINT car_chunk")
                 try:
-                    if self._upsert_one(cur, car, now):
-                        new_cars.append(car)
-                    cur.execute("RELEASE SAVEPOINT car_row")
+                    new_ids.update(self._upsert_chunk(cur, chunk, now))
+                    cur.execute("RELEASE SAVEPOINT car_chunk")
+                    continue
                 except psycopg2.Error as e:
-                    cur.execute("ROLLBACK TO SAVEPOINT car_row")
-                    skipped += 1
-                    logger.warning(f"Skipped car {car.source_id}: {e}")
+                    cur.execute("ROLLBACK TO SAVEPOINT car_chunk")
+                    logger.warning(f"Chunk upsert failed ({e}); retrying {len(chunk)} cars one by one")
+                for car in chunk:
+                    # One bad row (e.g. an absurd mileage overflowing INTEGER)
+                    # must not roll back the rest, run after run
+                    cur.execute("SAVEPOINT car_row")
+                    try:
+                        if self._upsert_one(cur, car, now):
+                            new_ids.add(car.source_id)
+                        cur.execute("RELEASE SAVEPOINT car_row")
+                    except psycopg2.Error as e:
+                        cur.execute("ROLLBACK TO SAVEPOINT car_row")
+                        skipped += 1
+                        logger.warning(f"Skipped car {car.source_id}: {e}")
 
+        new_cars = [car for car in cars if car.source_id in new_ids]
         logger.info(f"Stored {len(cars) - skipped} car listings ({len(new_cars)} new, {skipped} skipped)")
         return new_cars
+
+    @staticmethod
+    def _upsert_chunk(cur, cars: List[Car], now: datetime) -> List[str]:
+        """Insert or refresh many cars in one statement; returns the new ids.
+        Same rules as _upsert_one: refreshed rows take the scraped type,
+        prices and flags, and only backfill the other fields."""
+        rows = execute_values(
+            cur,
+            """
+            INSERT INTO car_listings
+            (source_id, source_name, city, listing_type, make, model,
+             variant, year, mileage_km, fuel, gearbox, price_local,
+             currency, price_usd, monthly_price_local, down_payment_local,
+             term_months, km_per_year, lease_kind, location,
+             seller_type, is_promoted, vat_added, url, thumbnail_url, listed_at,
+             first_seen_at, last_seen_at, status)
+            VALUES %s
+            ON CONFLICT (source_id) DO UPDATE SET
+                last_seen_at = EXCLUDED.last_seen_at,
+                status = 'active',
+                listing_type = EXCLUDED.listing_type,
+                price_local = EXCLUDED.price_local,
+                price_usd = EXCLUDED.price_usd,
+                monthly_price_local = EXCLUDED.monthly_price_local,
+                down_payment_local = EXCLUDED.down_payment_local,
+                term_months = EXCLUDED.term_months,
+                km_per_year = EXCLUDED.km_per_year,
+                lease_kind = EXCLUDED.lease_kind,
+                is_promoted = EXCLUDED.is_promoted,
+                vat_added = EXCLUDED.vat_added,
+                mileage_km = COALESCE(EXCLUDED.mileage_km, car_listings.mileage_km),
+                thumbnail_url = COALESCE(car_listings.thumbnail_url, EXCLUDED.thumbnail_url),
+                variant = COALESCE(car_listings.variant, EXCLUDED.variant),
+                fuel = COALESCE(car_listings.fuel, EXCLUDED.fuel),
+                gearbox = COALESCE(car_listings.gearbox, EXCLUDED.gearbox),
+                location = COALESCE(car_listings.location, EXCLUDED.location),
+                seller_type = COALESCE(car_listings.seller_type, EXCLUDED.seller_type),
+                listed_at = COALESCE(car_listings.listed_at, EXCLUDED.listed_at)
+            RETURNING source_id, (xmax = 0) AS inserted
+            """,
+            [
+                (car.source_id, car.source_name, car.city, car.listing_type,
+                 car.make, car.model, car.variant, car.year, car.mileage_km,
+                 car.fuel, car.gearbox, car.price_local, car.currency,
+                 car.price_usd, car.monthly_price_local, car.down_payment_local,
+                 car.term_months, car.km_per_year, car.lease_kind, car.location,
+                 car.seller_type, car.is_promoted, car.vat_added, car.url, car.thumbnail_url,
+                 car.listed_at, now, now, "active")
+                for car in cars
+            ],
+            page_size=len(cars),
+            fetch=True,
+        )
+        return [row["source_id"] for row in rows if row["inserted"]]
 
     @staticmethod
     def _upsert_one(cur, car: Car, now: datetime) -> bool:

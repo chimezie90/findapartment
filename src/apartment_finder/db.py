@@ -39,6 +39,21 @@ def get_connection():
         conn.close()
 
 
+def _add_column(cur, table, column_def):
+    """ADD COLUMN only if it's missing. ALTER TABLE takes an exclusive lock
+    even with IF NOT EXISTS, and init_db runs on every app start and every
+    scraper run: an unconditional ALTER would wait behind any long-running
+    write to the table and block every read queued behind it."""
+    column = column_def.split()[0]
+    cur.execute(
+        """SELECT 1 FROM information_schema.columns
+           WHERE table_schema = current_schema() AND table_name = %s AND column_name = %s""",
+        (table, column),
+    )
+    if cur.fetchone() is None:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column_def}")
+
+
 def init_db():
     """Create tables if they don't exist."""
     with get_connection() as conn:
@@ -65,9 +80,7 @@ def init_db():
         """)
 
         # Add neighborhood column if missing (migration for existing DBs)
-        cur.execute("""
-            ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS neighborhood TEXT
-        """)
+        _add_column(cur, "seen_listings", "neighborhood TEXT")
 
         # Listing metadata (filterable in the UI) and liveness tracking.
         # status: 'active' until a liveness check confirms the listing was
@@ -81,7 +94,7 @@ def init_db():
             "status TEXT NOT NULL DEFAULT 'active'",
             "status_checked_at TIMESTAMP",
         ):
-            cur.execute(f"ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS {column_def}")
+            _add_column(cur, "seen_listings", column_def)
 
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_city_source
@@ -165,7 +178,7 @@ def init_db():
             "km_per_year INTEGER",
             "lease_kind TEXT",
         ):
-            cur.execute(f"ALTER TABLE car_listings ADD COLUMN IF NOT EXISTS {column_def}")
+            _add_column(cur, "car_listings", column_def)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_car_city_type
             ON car_listings(city, listing_type)
@@ -219,14 +232,10 @@ def init_db():
         """)
         # missed_runs: clean full-catalog runs in a row that didn't see the
         # home. Marked gone at 2, so one paging hiccup doesn't hide it.
-        cur.execute(
-            "ALTER TABLE home_listings ADD COLUMN IF NOT EXISTS missed_runs INTEGER NOT NULL DEFAULT 0"
-        )
+        _add_column(cur, "home_listings", "missed_runs INTEGER NOT NULL DEFAULT 0")
         # under_offer: sold subject to conditions (solgt med forbehold), per
         # the detail page; still listed, so still active.
-        cur.execute(
-            "ALTER TABLE home_listings ADD COLUMN IF NOT EXISTS under_offer BOOLEAN NOT NULL DEFAULT FALSE"
-        )
+        _add_column(cur, "home_listings", "under_offer BOOLEAN NOT NULL DEFAULT FALSE")
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_home_source_status
             ON home_listings(source_name, status)

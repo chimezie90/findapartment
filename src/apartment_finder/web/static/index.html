@@ -876,7 +876,7 @@
 
                 if (result.success) {
                     btn.textContent = 'Fetching… (a few minutes)';
-                    const ok = await waitForFetch('apartments:' + city, result.started_at, 12);
+                    const ok = await waitForFetch('apartments:' + city, result.started_at, 20);
                     btn.textContent = ok === true ? 'Updated' : ok === false ? 'Fetch failed' : 'Still running';
                     fetchListings();
                     setTimeout(() => { btn.textContent = 'Fetch New Listings'; btn.disabled = false; }, 3000);

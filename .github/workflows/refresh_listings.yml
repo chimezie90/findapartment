@@ -25,7 +25,7 @@ env:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 300
     steps:
       - name: Write the start-and-wait helper
         run: |
@@ -109,17 +109,17 @@ jobs:
         run: |
           failed=0
           for city in copenhagen nyc la dubai lisbon bali sri_lanka; do
-            python3 run_job.py /api/fetch "{\"city\":\"$city\"}" "apartments:$city" 12 || failed=1
+            python3 run_job.py /api/fetch "{\"city\":\"$city\"}" "apartments:$city" 20 || failed=1
           done
           exit $failed
 
       - name: Cars for sale (DBA)
         if: always() && contains(fromJSON('["all","cars","twice-daily"]'), steps.plan.outputs.what)
-        run: python3 run_job.py /api/fetch-cars '{"source":"dba"}' cars:dba 15
+        run: python3 run_job.py /api/fetch-cars '{"source":"dba"}' cars:dba 30
 
       - name: Car leasing (findleasing.nu)
         if: always() && contains(fromJSON('["all","leasing","daily"]'), steps.plan.outputs.what)
-        run: python3 run_job.py /api/fetch-cars '{"source":"findleasing"}' cars:findleasing 15
+        run: python3 run_job.py /api/fetch-cars '{"source":"findleasing"}' cars:findleasing 30
 
       - name: Homes for sale (home.dk)
         if: always() && contains(fromJSON('["all","homes","daily"]'), steps.plan.outputs.what)

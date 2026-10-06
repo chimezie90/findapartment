@@ -1461,12 +1461,17 @@ def api_fetch():
             'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, Bali, and Sri Lanka have real listings.'
         }), 400
 
-    return _start_fetch(f'apartments:{city}', ['--city', city], cooldown_minutes=APARTMENT_FETCH_COOLDOWN_MINUTES)
+    return _start_fetch(f'apartments:{city}', ['--city', city], cooldown_minutes=APARTMENT_FETCH_COOLDOWN_MINUTES,
+                        timeout=APARTMENT_FETCH_TIMEOUT_SECONDS)
 
 CAR_SOURCES = ('dba', 'findleasing')
 # One fetch per source per window: these hit third-party sites, and the
 # endpoint is public.
-CAR_FETCH_COOLDOWN_MINUTES = 10
+# Runs are slower on Replit than locally (remote DB round trips per row):
+# a DBA run took >8 min there. Cooldowns must exceed timeouts so runs of the
+# same job can't overlap.
+CAR_FETCH_TIMEOUT_SECONDS = 25 * 60
+CAR_FETCH_COOLDOWN_MINUTES = 30
 # Lines worth showing a caller; full logs stay in the server log
 _SUMMARY_LINE = re.compile(r'(Fetched \d+|Stored \d+|Marked \d+|Liveness:|Homes run:|failed sources:)')
 
@@ -1521,7 +1526,8 @@ def _run_pipeline(args, timeout=480):
 # fetch endpoints start the run in a background thread and answer at once;
 # the run records its outcome in fetch_runs, readable via /api/fetch-status.
 # Callers (GitHub Actions) poll that, which also keeps the instance awake.
-APARTMENT_FETCH_COOLDOWN_MINUTES = 10
+APARTMENT_FETCH_TIMEOUT_SECONDS = 15 * 60
+APARTMENT_FETCH_COOLDOWN_MINUTES = 20
 # After a failed run, allow a retry this soon (instead of the full cooldown)
 FETCH_RETRY_AFTER_FAILURE_MINUTES = 30
 
@@ -1546,7 +1552,12 @@ def _record_fetch_run(name, started_at, ok, summary, cooldown_minutes):
 def _fetch_worker(name, args, timeout, started_at, cooldown_minutes):
     try:
         ok, summary = _run_pipeline(args, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        # Log what the run printed before it was killed, to see where it stalled
+        partial = (e.stdout or b'') + (e.stderr or b'')
+        if isinstance(partial, bytes):
+            partial = partial.decode('utf-8', 'replace')
+        print(f"[fetch {name}] timed out after {timeout}s; last output:\n{partial[-5000:]}", flush=True)
         ok, summary = False, [f'timed out after {timeout // 60} minutes']
     except Exception as e:
         print(f"[fetch {name}] error: {type(e).__name__}: {e}", flush=True)
@@ -1609,7 +1620,7 @@ def api_fetch_cars():
     if source not in CAR_SOURCES:
         return jsonify({'success': False, 'error': f"source must be one of {', '.join(CAR_SOURCES)}"}), 400
     return _start_fetch(f'cars:{source}', ['--cars', '--city', 'copenhagen', '--source', source],
-                        cooldown_minutes=CAR_FETCH_COOLDOWN_MINUTES)
+                        cooldown_minutes=CAR_FETCH_COOLDOWN_MINUTES, timeout=CAR_FETCH_TIMEOUT_SECONDS)
 
 
 # A full homes run is ~400 catalog pages plus 40 detail pages, 1.5 s apart,

@@ -471,3 +471,14 @@ def test_fetch_status_reports_running(client):
     thread.return_value.start.assert_called_once()
     status = client.get("/api/fetch-status?job=cars:dba").get_json()
     assert status["running"] is True and status["last"] is None
+
+
+def test_failed_long_cooldown_run_cannot_be_restarted_at_once(client):
+    _clear_fetch_state()
+    crash = MagicMock(returncode=1, stdout="", stderr="boom")
+    with patch("apartment_finder.web.app.subprocess.run", return_value=crash), \
+         patch("apartment_finder.web.app.threading.Thread", _InlineThread):
+        assert client.post("/api/fetch-homes").status_code == 202  # fails
+        # Failure frees the slot after 30 min, not immediately
+        assert client.post("/api/fetch-homes").status_code == 429
+

@@ -63,13 +63,17 @@ jobs:
                   since = ts(started["started_at"])
                   break
               if status == 429:  # already ran recently or still running
-                  _, s = call(f"/api/fetch-status?job={job}")
+                  code, s = call(f"/api/fetch-status?job={job}")
+                  if code != 200:
+                      print(f"{job}: got 429 and could not read status (HTTP {code})")
+                      sys.exit(1)
                   if s.get("running"):
                       print(f"{job}: a run is already in progress; waiting for it")
                       since = began - timedelta(hours=1)  # accept the in-progress run's result
                       break
-                  print(f"{job}: ran recently; nothing to do ({started.get('error')})")
-                  sys.exit(0)
+                  last = s.get("last") or {}
+                  print(f"{job}: ran recently (last run {'OK' if last.get('ok') else 'FAILED'}); not restarting")
+                  sys.exit(0 if last.get("ok") else 1)
               if status in (0, 500, 502, 503, 504) and attempt < 3:
                   print(f"{job}: start failed (HTTP {status}); retrying")
                   time.sleep(30 * 2 ** attempt)

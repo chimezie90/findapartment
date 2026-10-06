@@ -8,12 +8,15 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
+from psycopg2.extras import execute_values
 
 from ..db import get_connection, init_db
 from .costs import estimate_monthly_cost
 from .models import HomeListing
 
 logger = logging.getLogger(__name__)
+
+UPSERT_CHUNK_SIZE = 500
 
 
 class HomeListingService:
@@ -40,26 +43,107 @@ class HomeListingService:
         if not homes:
             return []
 
-        new_homes = []
+        homes = list({home.source_id: home for home in homes}.values())
+        new_ids = set()
         skipped = 0
         now = datetime.utcnow()
         with get_connection() as conn:
             cur = conn.cursor()
-            for home in homes:
-                # One bad row must not roll back the whole batch
-                cur.execute("SAVEPOINT home_row")
+            for start in range(0, len(homes), UPSERT_CHUNK_SIZE):
+                chunk = homes[start:start + UPSERT_CHUNK_SIZE]
+                # One statement per chunk: per-row queries are slow against a
+                # remote database (~4,400 homes per run)
+                cur.execute("SAVEPOINT home_chunk")
                 try:
-                    if self._upsert_one(cur, home, now):
-                        new_homes.append(home)
-                    cur.execute("RELEASE SAVEPOINT home_row")
+                    new_ids.update(self._upsert_chunk(cur, chunk, now))
+                    cur.execute("RELEASE SAVEPOINT home_chunk")
+                    continue
                 except psycopg2.Error as e:
-                    cur.execute("ROLLBACK TO SAVEPOINT home_row")
-                    skipped += 1
-                    logger.warning(f"Skipped home {home.source_id}: {e}")
+                    cur.execute("ROLLBACK TO SAVEPOINT home_chunk")
+                    logger.warning(f"Chunk upsert failed ({e}); retrying {len(chunk)} homes one by one")
+                for home in chunk:
+                    # One bad row must not roll back the whole batch
+                    cur.execute("SAVEPOINT home_row")
+                    try:
+                        if self._upsert_one(cur, home, now):
+                            new_ids.add(home.source_id)
+                        cur.execute("RELEASE SAVEPOINT home_row")
+                    except psycopg2.Error as e:
+                        cur.execute("ROLLBACK TO SAVEPOINT home_row")
+                        skipped += 1
+                        logger.warning(f"Skipped home {home.source_id}: {e}")
 
         self.last_skipped = skipped
+        new_homes = [home for home in homes if home.source_id in new_ids]
         logger.info(f"Stored {len(homes) - skipped} home listings ({len(new_homes)} new, {skipped} skipped)")
         return new_homes
+
+    @staticmethod
+    def _upsert_chunk(cur, homes: List[HomeListing], now: datetime) -> List[str]:
+        """Insert or refresh many homes in one statement; returns the new ids.
+        Same rules as _upsert_one (price-change tracking, backfills)."""
+        cur.execute(
+            "SELECT source_id, monthly_owner_expenses_dkk FROM home_listings WHERE source_id = ANY(%s)",
+            ([home.source_id for home in homes],),
+        )
+        stored_expenses = {row["source_id"]: row["monthly_owner_expenses_dkk"] for row in cur.fetchall()}
+        values = []
+        for home in homes:
+            expenses = home.monthly_owner_expenses_dkk or stored_expenses.get(home.source_id)
+            est = estimate_monthly_cost(home.price_dkk, expenses, home.property_type)["cash_out"]
+            values.append((
+                home.source_id, home.source_name, home.url, home.address, home.street,
+                home.postcode, home.city, home.municipality, home.property_type,
+                home.sqm, home.rooms, home.year_built, home.price_dkk, home.price_dkk,
+                home.monthly_owner_expenses_dkk, est, home.energy_label,
+                home.latitude, home.longitude, home.is_external, home.broker,
+                home.headline, home.thumbnail_url, home.listed_at, now, now, "active",
+            ))
+        # In ON CONFLICT ... SET, unqualified home_listings.* is the old row
+        rows = execute_values(
+            cur,
+            """
+            INSERT INTO home_listings
+            (source_id, source_name, url, address, street, postcode, city,
+             municipality, property_type, sqm, rooms, year_built, price_dkk,
+             first_price_dkk, monthly_owner_expenses_dkk, est_monthly_cash_dkk,
+             energy_label, latitude, longitude, is_external, broker, headline,
+             thumbnail_url, listed_at, first_seen_at, last_seen_at, status)
+            VALUES %s
+            ON CONFLICT (source_id) DO UPDATE SET
+                last_seen_at = EXCLUDED.last_seen_at,
+                status = 'active',
+                missed_runs = 0,
+                url = EXCLUDED.url,
+                address = EXCLUDED.address,
+                property_type = EXCLUDED.property_type,
+                price_dkk = EXCLUDED.price_dkk,
+                previous_price_dkk = CASE WHEN home_listings.price_dkk <> EXCLUDED.price_dkk
+                                          THEN home_listings.price_dkk
+                                          ELSE home_listings.previous_price_dkk END,
+                price_changed_at = CASE WHEN home_listings.price_dkk <> EXCLUDED.price_dkk
+                                        THEN EXCLUDED.last_seen_at
+                                        ELSE home_listings.price_changed_at END,
+                first_price_dkk = COALESCE(home_listings.first_price_dkk, home_listings.price_dkk),
+                est_monthly_cash_dkk = EXCLUDED.est_monthly_cash_dkk,
+                is_external = EXCLUDED.is_external,
+                broker = EXCLUDED.broker,
+                sqm = COALESCE(EXCLUDED.sqm, home_listings.sqm),
+                street = COALESCE(EXCLUDED.street, home_listings.street),
+                postcode = COALESCE(EXCLUDED.postcode, home_listings.postcode),
+                city = COALESCE(EXCLUDED.city, home_listings.city),
+                municipality = COALESCE(EXCLUDED.municipality, home_listings.municipality),
+                latitude = COALESCE(EXCLUDED.latitude, home_listings.latitude),
+                longitude = COALESCE(EXCLUDED.longitude, home_listings.longitude),
+                headline = COALESCE(EXCLUDED.headline, home_listings.headline),
+                thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, home_listings.thumbnail_url)
+            RETURNING source_id, (xmax = 0) AS inserted
+            """,
+            values,
+            page_size=len(values),
+            fetch=True,
+        )
+        return [row["source_id"] for row in rows if row["inserted"]]
 
     @staticmethod
     def _upsert_one(cur, home: HomeListing, now: datetime) -> bool:

@@ -860,12 +860,13 @@
                 const result = await response.json();
 
                 if (result.success) {
-                    btn.textContent = 'Success! Refreshing...';
+                    // The fetch runs in the background on the server
+                    btn.textContent = 'Started: new listings in a few minutes';
                     setTimeout(() => {
                         fetchListings();
                         btn.textContent = 'Fetch New Listings';
                         btn.disabled = false;
-                    }, 1000);
+                    }, 8000);
                 } else {
                     const errorMsg = result.error || result.stderr || 'Unknown error';
                     alert('Error: ' + errorMsg);

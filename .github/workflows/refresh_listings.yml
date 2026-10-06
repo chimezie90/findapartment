@@ -2,19 +2,21 @@ name: Refresh listings
 
 # Replit doesn't run the [[scheduled]] blocks in .replit, so this calls the
 # live site's own fetch endpoints. The scrapers run on the Replit server and
-# write to the production database. A failed fetch fails the job, so GitHub
-# emails the repo owner instead of the site silently going stale.
+# write to the production database. Replit's proxy cuts requests at ~5 min,
+# so each endpoint starts the run in the background and this job polls
+# /api/fetch-status until it finishes (the polling also keeps the instance
+# awake). A failed run fails the job, so GitHub emails the repo owner.
 
 on:
   schedule:
     - cron: '0 7,19 * * *'   # apartments (every city) + cars for sale, twice a day
-    - cron: '30 5 * * *'     # car leasing, once a day (politeness: see cars/findleasing.py)
+    - cron: '30 5 * * *'     # car leasing + homes for sale, once a day (politeness)
   workflow_dispatch:
     inputs:
       what:
         description: 'What to refresh'
         type: choice
-        options: [all, apartments, cars, leasing]
+        options: [all, apartments, cars, leasing, homes]
         default: all
 
 env:
@@ -23,14 +25,54 @@ env:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
+      - name: Write the start-and-wait helper
+        run: |
+          cat > run_job.py <<'PY'
+          """Start a fetch job on the site and wait for its outcome.
+          Usage: run_job.py <endpoint> <json body> <job name> <max minutes>"""
+          import json, sys, time, urllib.request, urllib.error
+          site = "https://findapartment.replit.app"
+          endpoint, body, job, max_minutes = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+
+          def call(path, data=None):
+              req = urllib.request.Request(site + path, data=data and data.encode(),
+                                           headers={"Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return r.status, json.load(r)
+              except urllib.error.HTTPError as e:
+                  return e.code, json.loads(e.read() or b"{}")
+
+          status, started = call(endpoint, body)
+          if status != 202:
+              print(f"{job}: could not start (HTTP {status}): {started.get('error')}")
+              sys.exit(1)
+          t0 = started["started_at"]
+          deadline = time.time() + max_minutes * 60
+          while time.time() < deadline:
+              time.sleep(30)
+              try:
+                  _, s = call(f"/api/fetch-status?job={job}")
+              except Exception as e:  # transient network/proxy error: keep polling
+                  print(f"{job}: status check failed ({e}); retrying")
+                  continue
+              last = s.get("last")
+              if last and last["started_at"] >= t0:
+                  print(f"{job}: {'OK' if last['ok'] else 'FAILED'}")
+                  print("\n".join(last["summary"]))
+                  sys.exit(0 if last["ok"] else 1)
+          print(f"{job}: no result after {max_minutes:.0f} min")
+          sys.exit(1)
+          PY
+
       - name: Decide what to run
         id: plan
         run: |
           what="${{ github.event.inputs.what }}"
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            if [ "${{ github.event.schedule }}" = "30 5 * * *" ]; then what=leasing; else what=twice-daily; fi
+            if [ "${{ github.event.schedule }}" = "30 5 * * *" ]; then what=daily; else what=twice-daily; fi
           fi
           echo "what=$what" >> "$GITHUB_OUTPUT"
 
@@ -39,20 +81,18 @@ jobs:
         run: |
           failed=0
           for city in copenhagen nyc la dubai lisbon bali sri_lanka; do
-            echo "== $city"
-            body=$(curl -sS -m 520 -X POST "$SITE/api/fetch" -H 'Content-Type: application/json' -d "{\"city\":\"$city\"}" || echo '{"success":false,"error":"request failed"}')
-            echo "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("ok" if d.get("success") else "FAILED: " + str(d.get("error"))[:500]); sys.exit(0 if d.get("success") else 1)' || failed=1
+            python3 run_job.py /api/fetch "{\"city\":\"$city\"}" "apartments:$city" 12 || failed=1
           done
           exit $failed
 
       - name: Cars for sale (DBA)
         if: always() && contains(fromJSON('["all","cars","twice-daily"]'), steps.plan.outputs.what)
-        run: |
-          curl -sS -m 520 -X POST "$SITE/api/fetch-cars" -H 'Content-Type: application/json' -d '{"source":"dba"}' \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d.get("summary") or []) or d.get("error")); sys.exit(0 if d.get("success") else 1)'
+        run: python3 run_job.py /api/fetch-cars '{"source":"dba"}' cars:dba 15
 
       - name: Car leasing (findleasing.nu)
-        if: always() && contains(fromJSON('["all","leasing"]'), steps.plan.outputs.what)
-        run: |
-          curl -sS -m 520 -X POST "$SITE/api/fetch-cars" -H 'Content-Type: application/json' -d '{"source":"findleasing"}' \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(d.get("summary") or []) or d.get("error")); sys.exit(0 if d.get("success") else 1)'
+        if: always() && contains(fromJSON('["all","leasing","daily"]'), steps.plan.outputs.what)
+        run: python3 run_job.py /api/fetch-cars '{"source":"findleasing"}' cars:findleasing 15
+
+      - name: Homes for sale (home.dk)
+        if: always() && contains(fromJSON('["all","homes","daily"]'), steps.plan.outputs.what)
+        run: python3 run_job.py /api/fetch-homes '{}' homes:homedk 60

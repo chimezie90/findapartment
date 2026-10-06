@@ -426,7 +426,7 @@
                     body: JSON.stringify({ source }),
                 });
                 const data = await res.json().catch(() => ({}));
-                btn.textContent = data.success ? 'Updated' : (data.error || 'Fetch failed — see server log');
+                btn.textContent = data.success ? 'Started: check back in a few minutes' : (data.error || 'Fetch failed');
                 loadCars(false);
             } catch (err) {
                 btn.textContent = 'Fetch failed: ' + err.message;

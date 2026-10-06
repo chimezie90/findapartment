@@ -397,36 +397,37 @@ def test_homes_page_served_with_nav(client):
 
 # --- /api/fetch-homes --------------------------------------------------------
 
-def _clear_fetch_locks():
+class _InlineThread:
+    """Stands in for threading.Thread: runs the fetch job immediately."""
+    def __init__(self, target, args=(), **kwargs):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+def _clear_fetch_state():
     with get_connection() as conn:
-        conn.cursor().execute("DELETE FROM fetch_locks")
+        conn.cursor().execute("DELETE FROM fetch_locks; DELETE FROM fetch_runs")
 
 
-def test_fetch_homes_endpoint_throttles_and_summarizes(client):
-    _clear_fetch_locks()
+def test_fetch_homes_endpoint_starts_job_and_throttles(client):
+    _clear_fetch_state()
     log = ("12:00 | INFO | apartment_finder.homes.service | Stored 4380 home listings (12 new, 0 skipped)\n"
            "12:00 | INFO | apartment_finder.main | Homes run: 4380 listings, 412 requests")
     done = MagicMock(returncode=0, stdout=log, stderr="")
-    with patch("apartment_finder.web.app.subprocess.run", return_value=done) as run:
+    with patch("apartment_finder.web.app.subprocess.run", return_value=done) as run, \
+         patch("apartment_finder.web.app.threading.Thread", _InlineThread):
         first = client.post("/api/fetch-homes")
         second = client.post("/api/fetch-homes")
 
-    assert first.status_code == 200
-    assert first.get_json()["summary"] == ["Stored 4380 home listings (12 new, 0 skipped)",
-                                           "Homes run: 4380 listings, 412 requests"]
+    assert first.status_code == 202
     args = run.call_args_list[0].args[0]
     assert args[-6:] == ["--homes", "--city", "copenhagen", "--source", "homedk", "--no-email"]
     assert run.call_args_list[0].kwargs["timeout"] == 3000
     assert second.status_code == 429  # cooldown stored in Postgres
     assert run.call_count == 1
-
-
-def test_fetch_homes_failure_does_not_leak_logs(client):
-    _clear_fetch_locks()
-    crash = MagicMock(returncode=1, stdout="Traceback (most recent call last):\n  File \"/home/runner/x.py\"",
-                      stderr='psycopg2.OperationalError: connection to server at "db.internal" failed')
-    with patch("apartment_finder.web.app.subprocess.run", return_value=crash):
-        response = client.post("/api/fetch-homes")
-    body = response.get_data(as_text=True)
-    assert response.status_code == 502
-    assert "Traceback" not in body and "/home/runner" not in body and "db.internal" not in body
+    last = client.get("/api/fetch-status?job=homes:homedk").get_json()["last"]
+    assert last["ok"] is True
+    assert last["summary"] == ["Stored 4380 home listings (12 new, 0 skipped)",
+                               "Homes run: 4380 listings, 412 requests"]

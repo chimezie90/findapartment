@@ -5,8 +5,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, jsonify, send_from_directory, request
 import requests as http_requests
@@ -1460,40 +1461,7 @@ def api_fetch():
             'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, Bali, and Sri Lanka have real listings.'
         }), 400
 
-    try:
-        _init_app_db()
-
-        # Get project root
-        project_root = Path(__file__).parent.parent.parent.parent
-
-        # Run the main scraper across all sources configured for this city.
-        # Timeout is generous since a city can now sequentially run several
-        # sources (e.g. NYC: craigslist + streeteasy + renthop), not just one.
-        result = subprocess.run(
-            [sys.executable, '-m', 'apartment_finder.main', '--city', city, '--no-email'],
-            capture_output=True,
-            text=True,
-            timeout=480,
-            cwd=str(project_root),
-            env={**os.environ, 'PYTHONPATH': str(project_root / 'src') + ':' + os.environ.get('PYTHONPATH', '')}
-        )
-
-        # Full output goes to the server log only: it can carry tracebacks,
-        # server paths and DB host details, and this endpoint is public
-        print(f"[fetch {city}] exit {result.returncode}\n{(result.stdout or '')[-3000:]}{(result.stderr or '')[-3000:]}", flush=True)
-        if result.returncode == 0:
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Scraper failed; details are in the server log'})
-
-    except subprocess.TimeoutExpired:
-        return jsonify({
-            'success': False,
-            'error': 'Fetch timed out after 8 minutes'
-        }), 504
-    except Exception as e:
-        print(f"[fetch {city}] error: {e}", flush=True)
-        return jsonify({'success': False, 'error': 'Fetch failed; details are in the server log'}), 500
-
+    return _start_fetch(f'apartments:{city}', ['--city', city], cooldown_minutes=APARTMENT_FETCH_COOLDOWN_MINUTES)
 
 CAR_SOURCES = ('dba', 'findleasing')
 # One fetch per source per window: these hit third-party sites, and the
@@ -1507,7 +1475,7 @@ def _claim_fetch_slot(name, cooldown_minutes):
     """Atomically take the fetch slot for `name` if its cooldown has passed.
 
     Kept in Postgres so the cooldown holds across autoscale instances and
-    restarts. Returns True if this caller may run the fetch.
+    restarts. Returns the claimed start time, or None if still cooling down.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1517,10 +1485,11 @@ def _claim_fetch_slot(name, cooldown_minutes):
                ON CONFLICT (name) DO UPDATE SET started_at = EXCLUDED.started_at
                WHERE fetch_locks.started_at
                      < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
-               RETURNING 1""",
+               RETURNING started_at""",
             (name, cooldown_minutes),
         )
-        return cur.fetchone() is not None
+        row = cur.fetchone()
+        return row["started_at"] if row else None
 
 
 def _run_pipeline(args, timeout=480):
@@ -1541,6 +1510,85 @@ def _run_pipeline(args, timeout=480):
     return result.returncode == 0, summary[-10:]
 
 
+# Replit's proxy cuts requests at ~5 minutes, and a fetch can take 30. So
+# fetch endpoints start the run in a background thread and answer at once;
+# the run records its outcome in fetch_runs, readable via /api/fetch-status.
+# Callers (GitHub Actions) poll that, which also keeps the instance awake.
+APARTMENT_FETCH_COOLDOWN_MINUTES = 10
+# After a failed run, allow a retry this soon (instead of the full cooldown)
+FETCH_RETRY_AFTER_FAILURE_MINUTES = 30
+
+
+def _record_fetch_run(name, started_at, ok, summary, cooldown_minutes):
+    with get_connection() as conn:
+        conn.cursor().execute(
+            """INSERT INTO fetch_runs (name, started_at, finished_at, ok, summary)
+               VALUES (%s, %s, NOW() AT TIME ZONE 'UTC', %s, %s)""",
+            (name, started_at, ok, '\n'.join(summary)[:2000]),
+        )
+        if not ok:
+            # Free the slot early so a failed run can be retried soon
+            conn.cursor().execute(
+                """UPDATE fetch_locks
+                   SET started_at = (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
+                   WHERE name = %s AND started_at = %s""",
+                (max(cooldown_minutes - FETCH_RETRY_AFTER_FAILURE_MINUTES, 0), name, started_at),
+            )
+
+
+def _fetch_worker(name, args, timeout, started_at, cooldown_minutes):
+    try:
+        ok, summary = _run_pipeline(args, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        ok, summary = False, [f'timed out after {timeout // 60} minutes']
+    except Exception as e:
+        print(f"[fetch {name}] error: {type(e).__name__}: {e}", flush=True)
+        ok, summary = False, ['run failed; details are in the server log']
+    try:
+        _record_fetch_run(name, started_at, ok, summary, cooldown_minutes)
+    except Exception as e:
+        print(f"[fetch {name}] could not record result: {type(e).__name__}: {e}", flush=True)
+
+
+def _start_fetch(name, args, cooldown_minutes, timeout=480):
+    """Claim the cooldown slot and start the pipeline in the background."""
+    try:
+        started_at = _claim_fetch_slot(name, cooldown_minutes)
+        if started_at is None:
+            return jsonify({'success': False, 'error': f'{name} ran recently; try again later'}), 429
+        threading.Thread(target=_fetch_worker, args=(name, args, timeout, started_at, cooldown_minutes),
+                         name=f'fetch-{name}', daemon=True).start()
+    except Exception as e:
+        print(f"[fetch {name}] could not start: {type(e).__name__}: {e}", flush=True)
+        return jsonify({'success': False, 'error': 'Could not start the fetch; details are in the server log'}), 500
+    return jsonify({'success': True, 'started': True, 'job': name,
+                    'started_at': started_at.isoformat() + 'Z'}), 202
+
+
+@app.route('/api/fetch-status')
+def api_fetch_status():
+    """Latest finished run for a fetch job, e.g. ?job=cars:dba. Also says
+    whether a run started after that is still going (running: true)."""
+    name = request.args.get('job', '')
+    if not re.fullmatch(r'[a-z_]+:[a-z_]+', name):
+        return jsonify({'error': 'job must look like cars:dba'}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""SELECT started_at, finished_at, ok, summary FROM fetch_runs
+                       WHERE name = %s ORDER BY finished_at DESC LIMIT 1""", (name,))
+        last = cur.fetchone()
+        cur.execute("SELECT started_at FROM fetch_locks WHERE name = %s", (name,))
+        lock = cur.fetchone()
+    running = bool(lock and (not last or lock['started_at'] > last['started_at'])
+                   and lock['started_at'] > datetime.utcnow() - timedelta(hours=1))
+    result = {'job': name, 'running': running, 'last': None}
+    if last:
+        result['last'] = {'started_at': last['started_at'].isoformat() + 'Z',
+                          'finished_at': last['finished_at'].isoformat() + 'Z',
+                          'ok': last['ok'], 'summary': (last['summary'] or '').split('\n')}
+    return jsonify(result)
+
+
 @app.route('/api/fetch-cars', methods=['POST'])
 def api_fetch_cars():
     """Run the car pipeline for one source on this server (so it writes to
@@ -1548,15 +1596,8 @@ def api_fetch_cars():
     source = (request.get_json(silent=True) or {}).get('source')
     if source not in CAR_SOURCES:
         return jsonify({'success': False, 'error': f"source must be one of {', '.join(CAR_SOURCES)}"}), 400
-    if not _claim_fetch_slot(f'cars:{source}', CAR_FETCH_COOLDOWN_MINUTES):
-        return jsonify({'success': False,
-                        'error': f'{source} was fetched in the last {CAR_FETCH_COOLDOWN_MINUTES} min; try again later'}), 429
-    try:
-        ok, summary = _run_pipeline(['--cars', '--city', 'copenhagen', '--source', source])
-    except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'error': 'Car fetch timed out after 8 minutes'}), 504
-    return jsonify({'success': ok, 'summary': summary,
-                    **({} if ok else {'error': 'Car fetch failed; details are in the server log'})}), (200 if ok else 502)
+    return _start_fetch(f'cars:{source}', ['--cars', '--city', 'copenhagen', '--source', source],
+                        cooldown_minutes=CAR_FETCH_COOLDOWN_MINUTES)
 
 
 # A full homes run is ~400 catalog pages plus 40 detail pages, 1.5 s apart,
@@ -1569,22 +1610,9 @@ HOME_FETCH_TIMEOUT_SECONDS = 3000
 
 @app.route('/api/fetch-homes', methods=['POST'])
 def api_fetch_homes():
-    """Run the homes pipeline (home.dk, Copenhagen area) on this server."""
-    try:
-        if not _claim_fetch_slot('homes:homedk', HOME_FETCH_COOLDOWN_MINUTES):
-            return jsonify({'success': False,
-                            'error': 'Homes were fetched in the last 20 hours; try again later'}), 429
-        ok, summary = _run_pipeline(['--homes', '--city', 'copenhagen', '--source', 'homedk'],
-                                    timeout=HOME_FETCH_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return jsonify({'success': False,
-                        'error': f'Homes fetch timed out after {HOME_FETCH_TIMEOUT_SECONDS // 60} minutes'}), 504
-    except Exception as e:
-        print(f"[fetch homes] error: {type(e).__name__}: {e}", flush=True)
-        return jsonify({'success': False, 'error': 'Homes fetch failed; details are in the server log'}), 500
-    return jsonify({'success': ok, 'summary': summary,
-                    **({} if ok else {'error': 'Homes fetch failed; details are in the server log'})}), (200 if ok else 502)
-
+    """Start the homes pipeline (home.dk, Copenhagen area) on this server."""
+    return _start_fetch('homes:homedk', ['--homes', '--city', 'copenhagen', '--source', 'homedk'],
+                        cooldown_minutes=HOME_FETCH_COOLDOWN_MINUTES, timeout=HOME_FETCH_TIMEOUT_SECONDS)
 
 # Initialize database on startup
 with app.app_context():

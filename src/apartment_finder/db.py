@@ -245,6 +245,19 @@ def init_db():
             )
         """)
 
+        # Outcome of each background fetch run (see /api/fetch-status)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fetch_runs (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                started_at TIMESTAMP NOT NULL,
+                finished_at TIMESTAMP NOT NULL,
+                ok BOOLEAN NOT NULL,
+                summary TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_fetch_runs_name ON fetch_runs(name, finished_at)")
+
         # One-time purge: the Boligportal adapter used to insert five
         # hardcoded demo listings (boligportal_cph_001..005) whenever its
         # scrape failed, and they showed up on the site as real listings.

@@ -395,38 +395,77 @@ def test_cars_page_served(client):
     response.close()
 
 
-def _clear_fetch_locks():
+class _InlineThread:
+    """Stands in for threading.Thread: runs the fetch job immediately."""
+    def __init__(self, target, args=(), **kwargs):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+def _clear_fetch_state():
     with get_connection() as conn:
-        conn.cursor().execute("DELETE FROM fetch_locks")
+        conn.cursor().execute("DELETE FROM fetch_locks; DELETE FROM fetch_runs")
 
 
-def test_fetch_cars_endpoint_validates_and_throttles(client):
-    _clear_fetch_locks()
+def test_fetch_cars_endpoint_starts_job_throttles_and_reports(client):
+    _clear_fetch_state()
     assert client.post("/api/fetch-cars", json={"source": "bilbasen"}).status_code == 400
     assert client.post("/api/fetch-cars", data="x").status_code == 400  # no default source
 
     log = "12:00 | INFO | apartment_finder.cars.service | Stored 150 car listings (2 new, 0 skipped)"
     done = MagicMock(returncode=0, stdout=log, stderr="")
-    with patch("apartment_finder.web.app.subprocess.run", return_value=done) as run:
+    with patch("apartment_finder.web.app.subprocess.run", return_value=done) as run, \
+         patch("apartment_finder.web.app.threading.Thread", _InlineThread):
         first = client.post("/api/fetch-cars", json={"source": "dba"})
         second = client.post("/api/fetch-cars", json={"source": "dba"})
         other = client.post("/api/fetch-cars", json={"source": "findleasing"})
 
-    assert first.status_code == 200
-    assert first.get_json()["summary"] == ["Stored 150 car listings (2 new, 0 skipped)"]
+    assert first.status_code == 202 and first.get_json()["started"] is True
     assert run.call_args_list[0].args[0][-3:] == ["--source", "dba", "--no-email"]
     assert second.status_code == 429  # cooldown is per source, stored in Postgres
-    assert other.status_code == 200
+    assert other.status_code == 202
     assert run.call_count == 2
 
+    status = client.get("/api/fetch-status?job=cars:dba").get_json()
+    assert status["running"] is False
+    assert status["last"]["ok"] is True
+    assert status["last"]["summary"] == ["Stored 150 car listings (2 new, 0 skipped)"]
+    assert client.get("/api/fetch-status?job=bad name").status_code == 400
 
-def test_fetch_cars_failure_does_not_leak_logs(client):
-    _clear_fetch_locks()
+
+def test_fetch_cars_failure_does_not_leak_logs_and_allows_retry(client):
+    _clear_fetch_state()
     crash = MagicMock(returncode=1, stdout="Traceback (most recent call last):\n  File \"/home/runner/workspace/x.py\"",
                       stderr='psycopg2.OperationalError: connection to server at "db.internal" failed')
-    with patch("apartment_finder.web.app.subprocess.run", return_value=crash):
-        response = client.post("/api/fetch-cars", json={"source": "dba"})
+    with patch("apartment_finder.web.app.subprocess.run", return_value=crash), \
+         patch("apartment_finder.web.app.threading.Thread", _InlineThread):
+        client.post("/api/fetch-cars", json={"source": "dba"})
 
-    body = response.get_data(as_text=True)
-    assert response.status_code == 502
+    status = client.get("/api/fetch-status?job=cars:dba")
+    body = status.get_data(as_text=True)
+    assert status.get_json()["last"]["ok"] is False
     assert "Traceback" not in body and "/home/runner" not in body and "db.internal" not in body
+
+    # With a long cooldown, a failed run frees the slot after 30 min instead
+    _clear_fetch_state()
+    with patch("apartment_finder.web.app.subprocess.run", return_value=crash), \
+         patch("apartment_finder.web.app.threading.Thread", _InlineThread), \
+         patch("apartment_finder.web.app.CAR_FETCH_COOLDOWN_MINUTES", 600):
+        client.post("/api/fetch-cars", json={"source": "dba"})
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT started_at FROM fetch_locks WHERE name = 'cars:dba'")
+        started = cur.fetchone()["started_at"]
+    expires_in = started + timedelta(minutes=600) - datetime.utcnow()
+    assert timedelta(minutes=29) < expires_in <= timedelta(minutes=30)
+
+
+def test_fetch_status_reports_running(client):
+    _clear_fetch_state()
+    with patch("apartment_finder.web.app.threading.Thread") as thread:  # never runs
+        assert client.post("/api/fetch-cars", json={"source": "dba"}).status_code == 202
+    thread.return_value.start.assert_called_once()
+    status = client.get("/api/fetch-status?job=cars:dba").get_json()
+    assert status["running"] is True and status["last"] is None

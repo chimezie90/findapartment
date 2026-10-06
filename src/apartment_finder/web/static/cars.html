@@ -443,7 +443,7 @@
                 const data = await res.json().catch(() => ({}));
                 if (!data.success) { btn.textContent = data.error || 'Fetch failed'; return; }
                 btn.textContent = source === 'findleasing' ? 'Fetching… (2–4 min)' : 'Fetching… (about 5 min)';
-                const ok = await waitForFetch('cars:' + source, data.started_at, 15);
+                const ok = await waitForFetch('cars:' + source, data.started_at, 30);
                 btn.textContent = ok === true ? 'Updated' : ok === false ? 'Fetch failed' : 'Still running: check back later';
                 loadCars(false);
             } catch (err) {

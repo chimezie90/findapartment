@@ -843,6 +843,21 @@
             sourceLabel.textContent = `via ${label}`;
         }
 
+        // Fetches run in the background on the server; poll until this run
+        // finishes (this also keeps the server awake while it runs)
+        async function waitForFetch(job, startedAt, maxMinutes) {
+            const since = new Date(startedAt).getTime();
+            const deadline = Date.now() + maxMinutes * 60000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 15000));
+                try {
+                    const s = await (await fetch('/api/fetch-status?job=' + encodeURIComponent(job))).json();
+                    if (s.last && new Date(s.last.started_at).getTime() >= since && !s.running) return s.last.ok;
+                } catch (e) { /* keep polling */ }
+            }
+            return null;  // still running or lost
+        }
+
         async function fetchNewListings() {
             const btn = document.getElementById('fetchBtn');
             const city = document.getElementById('fetchCity').value;
@@ -860,13 +875,11 @@
                 const result = await response.json();
 
                 if (result.success) {
-                    // The fetch runs in the background on the server
-                    btn.textContent = 'Started: new listings in a few minutes';
-                    setTimeout(() => {
-                        fetchListings();
-                        btn.textContent = 'Fetch New Listings';
-                        btn.disabled = false;
-                    }, 8000);
+                    btn.textContent = 'Fetching… (a few minutes)';
+                    const ok = await waitForFetch('apartments:' + city, result.started_at, 12);
+                    btn.textContent = ok === true ? 'Updated' : ok === false ? 'Fetch failed' : 'Still running';
+                    fetchListings();
+                    setTimeout(() => { btn.textContent = 'Fetch New Listings'; btn.disabled = false; }, 3000);
                 } else {
                     const errorMsg = result.error || result.stderr || 'Unknown error';
                     alert('Error: ' + errorMsg);

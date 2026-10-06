@@ -415,6 +415,21 @@
 
         // Fetches the current tab's source on the server. Leasing walks the
         // whole findleasing catalog, so it takes a few minutes.
+        // Fetches run in the background on the server; poll until this run
+        // finishes (this also keeps the server awake while it runs)
+        async function waitForFetch(job, startedAt, maxMinutes) {
+            const since = new Date(startedAt).getTime();
+            const deadline = Date.now() + maxMinutes * 60000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 15000));
+                try {
+                    const s = await (await fetch('/api/fetch-status?job=' + encodeURIComponent(job))).json();
+                    if (s.last && new Date(s.last.started_at).getTime() >= since && !s.running) return s.last.ok;
+                } catch (e) { /* keep polling */ }
+            }
+            return null;  // still running or lost
+        }
+
         $('fetchBtn').addEventListener('click', async () => {
             const btn = $('fetchBtn');
             const source = state.type === 'lease' ? 'findleasing' : 'dba';
@@ -426,7 +441,10 @@
                     body: JSON.stringify({ source }),
                 });
                 const data = await res.json().catch(() => ({}));
-                btn.textContent = data.success ? 'Started: check back in a few minutes' : (data.error || 'Fetch failed');
+                if (!data.success) { btn.textContent = data.error || 'Fetch failed'; return; }
+                btn.textContent = source === 'findleasing' ? 'Fetching… (2–4 min)' : 'Fetching… (about 5 min)';
+                const ok = await waitForFetch('cars:' + source, data.started_at, 15);
+                btn.textContent = ok === true ? 'Updated' : ok === false ? 'Fetch failed' : 'Still running: check back later';
                 loadCars(false);
             } catch (err) {
                 btn.textContent = 'Fetch failed: ' + err.message;

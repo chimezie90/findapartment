@@ -25,7 +25,7 @@ env:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 200
     steps:
       - name: Write the start-and-wait helper
         run: |
@@ -33,33 +33,61 @@ jobs:
           """Start a fetch job on the site and wait for its outcome.
           Usage: run_job.py <endpoint> <json body> <job name> <max minutes>"""
           import json, sys, time, urllib.request, urllib.error
+          from datetime import datetime, timedelta, timezone
           site = "https://findapartment.replit.app"
           endpoint, body, job, max_minutes = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 
           def call(path, data=None):
+              """(HTTP status, JSON body); status 0 on network errors or non-JSON bodies."""
               req = urllib.request.Request(site + path, data=data and data.encode(),
                                            headers={"Content-Type": "application/json"})
               try:
                   with urllib.request.urlopen(req, timeout=60) as r:
-                      return r.status, json.load(r)
+                      return r.status, json.loads(r.read() or b"{}")
               except urllib.error.HTTPError as e:
-                  return e.code, json.loads(e.read() or b"{}")
+                  try:
+                      return e.code, json.loads(e.read() or b"{}")
+                  except ValueError:
+                      return e.code, {}
+              except (urllib.error.URLError, TimeoutError, ValueError) as e:
+                  return 0, {"error": str(e)}
 
-          status, started = call(endpoint, body)
-          if status != 202:
+          def ts(s):
+              return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+          began = datetime.now(timezone.utc)
+          since = None
+          for attempt in range(4):  # cold starts and proxy hiccups: retry the start
+              status, started = call(endpoint, body)
+              if status == 202:
+                  since = ts(started["started_at"])
+                  break
+              if status == 429:  # already ran recently or still running
+                  _, s = call(f"/api/fetch-status?job={job}")
+                  if s.get("running"):
+                      print(f"{job}: a run is already in progress; waiting for it")
+                      since = began - timedelta(hours=1)  # accept the in-progress run's result
+                      break
+                  print(f"{job}: ran recently; nothing to do ({started.get('error')})")
+                  sys.exit(0)
+              if status in (0, 500, 502, 503, 504) and attempt < 3:
+                  print(f"{job}: start failed (HTTP {status}); retrying")
+                  time.sleep(30 * 2 ** attempt)
+                  continue
               print(f"{job}: could not start (HTTP {status}): {started.get('error')}")
               sys.exit(1)
-          t0 = started["started_at"]
+          if since is None:
+              sys.exit(1)
+
           deadline = time.time() + max_minutes * 60
           while time.time() < deadline:
               time.sleep(30)
-              try:
-                  _, s = call(f"/api/fetch-status?job={job}")
-              except Exception as e:  # transient network/proxy error: keep polling
-                  print(f"{job}: status check failed ({e}); retrying")
+              status, s = call(f"/api/fetch-status?job={job}")
+              if status != 200:
+                  print(f"{job}: status check failed (HTTP {status}); retrying")
                   continue
               last = s.get("last")
-              if last and last["started_at"] >= t0:
+              if last and ts(last["started_at"]) >= since and not s.get("running"):
                   print(f"{job}: {'OK' if last['ok'] else 'FAILED'}")
                   print("\n".join(last["summary"]))
                   sys.exit(0 if last["ok"] else 1)

@@ -323,7 +323,8 @@ def run_car_pipeline(
                     )
             except Exception as e:
                 logger.error(f"Error fetching cars from {source_name}: {e}")
-                failures.append(f"{city_key}/{source_name}: {e}")
+                # Type only: run summaries are readable via /api/fetch-status
+                failures.append(f"{city_key}/{source_name}: {type(e).__name__} (see server log)")
                 continue
 
             try:

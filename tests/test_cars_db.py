@@ -160,7 +160,8 @@ def test_run_car_pipeline_raises_when_a_source_fails(service):
         with pytest.raises(CarPipelineError) as exc:
             run_car_pipeline(config)
 
-    assert "copenhagen/dba: bad config" in str(exc.value)
+    assert "copenhagen/dba: RuntimeError (see server log)" in str(exc.value)
+    assert "bad config" not in str(exc.value)  # raw error text stays in the server log
     assert "aarhus/dba: 0 listings" in str(exc.value)
     # A failing first city doesn't skip later cities or cleanup
     empty.fetch_listings.assert_called_once()
@@ -446,6 +447,7 @@ def test_fetch_cars_failure_does_not_leak_logs_and_allows_retry(client):
     status = client.get("/api/fetch-status?job=cars:dba")
     body = status.get_data(as_text=True)
     assert status.get_json()["last"]["ok"] is False
+    assert status.get_json()["running"] is False
     assert "Traceback" not in body and "/home/runner" not in body and "db.internal" not in body
 
     # With a long cooldown, a failed run frees the slot after 30 min instead

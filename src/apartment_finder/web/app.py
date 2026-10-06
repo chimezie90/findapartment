@@ -1471,11 +1471,13 @@ CAR_FETCH_COOLDOWN_MINUTES = 10
 _SUMMARY_LINE = re.compile(r'(Fetched \d+|Stored \d+|Marked \d+|Liveness:|Homes run:|failed sources:)')
 
 
-def _claim_fetch_slot(name, cooldown_minutes):
+def _claim_fetch_slot(name, cooldown_minutes, stale_after_minutes=None):
     """Atomically take the fetch slot for `name` if its cooldown has passed.
 
     Kept in Postgres so the cooldown holds across autoscale instances and
     restarts. Returns the claimed start time, or None if still cooling down.
+    A run that died without recording a result (e.g. its instance was shut
+    down) stops holding the slot after `stale_after_minutes`.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1485,8 +1487,13 @@ def _claim_fetch_slot(name, cooldown_minutes):
                ON CONFLICT (name) DO UPDATE SET started_at = EXCLUDED.started_at
                WHERE fetch_locks.started_at
                      < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
+                  OR (fetch_locks.started_at
+                        < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
+                      AND NOT EXISTS (SELECT 1 FROM fetch_runs r
+                                      WHERE r.name = fetch_locks.name
+                                        AND r.started_at = fetch_locks.started_at))
                RETURNING started_at""",
-            (name, cooldown_minutes),
+            (name, cooldown_minutes, stale_after_minutes or cooldown_minutes),
         )
         row = cur.fetchone()
         return row["started_at"] if row else None
@@ -1553,16 +1560,20 @@ def _fetch_worker(name, args, timeout, started_at, cooldown_minutes):
 def _start_fetch(name, args, cooldown_minutes, timeout=480):
     """Claim the cooldown slot and start the pipeline in the background."""
     try:
-        started_at = _claim_fetch_slot(name, cooldown_minutes)
+        started_at = _claim_fetch_slot(name, cooldown_minutes, stale_after_minutes=timeout // 60 + 10)
         if started_at is None:
             return jsonify({'success': False, 'error': f'{name} ran recently; try again later'}), 429
-        threading.Thread(target=_fetch_worker, args=(name, args, timeout, started_at, cooldown_minutes),
-                         name=f'fetch-{name}', daemon=True).start()
+        try:
+            threading.Thread(target=_fetch_worker, args=(name, args, timeout, started_at, cooldown_minutes),
+                             name=f'fetch-{name}', daemon=True).start()
+        except Exception:
+            _record_fetch_run(name, started_at, False, ['could not start the run'], cooldown_minutes)
+            raise
     except Exception as e:
         print(f"[fetch {name}] could not start: {type(e).__name__}: {e}", flush=True)
         return jsonify({'success': False, 'error': 'Could not start the fetch; details are in the server log'}), 500
     return jsonify({'success': True, 'started': True, 'job': name,
-                    'started_at': started_at.isoformat() + 'Z'}), 202
+                    'started_at': started_at.isoformat(timespec='microseconds') + 'Z'}), 202
 
 
 @app.route('/api/fetch-status')
@@ -1579,12 +1590,13 @@ def api_fetch_status():
         last = cur.fetchone()
         cur.execute("SELECT started_at FROM fetch_locks WHERE name = %s", (name,))
         lock = cur.fetchone()
-    running = bool(lock and (not last or lock['started_at'] > last['started_at'])
+    # finished_at, not started_at: a failed run moves its lock to finish time
+    running = bool(lock and (not last or lock['started_at'] > last['finished_at'])
                    and lock['started_at'] > datetime.utcnow() - timedelta(hours=1))
     result = {'job': name, 'running': running, 'last': None}
     if last:
-        result['last'] = {'started_at': last['started_at'].isoformat() + 'Z',
-                          'finished_at': last['finished_at'].isoformat() + 'Z',
+        result['last'] = {'started_at': last['started_at'].isoformat(timespec='microseconds') + 'Z',
+                          'finished_at': last['finished_at'].isoformat(timespec='microseconds') + 'Z',
                           'ok': last['ok'], 'summary': (last['summary'] or '').split('\n')}
     return jsonify(result)
 

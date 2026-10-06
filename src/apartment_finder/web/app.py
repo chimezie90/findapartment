@@ -1482,7 +1482,8 @@ def _claim_fetch_slot(name, cooldown_minutes, stale_after_minutes=None):
     Kept in Postgres so the cooldown holds across autoscale instances and
     restarts. Returns the claimed start time, or None if still cooling down.
     A run that died without recording a result (e.g. its instance was shut
-    down) stops holding the slot after `stale_after_minutes`.
+    down) stops holding the slot after `stale_after_minutes`. That only
+    matters when it is shorter than the cooldown (today: homes only).
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1494,9 +1495,11 @@ def _claim_fetch_slot(name, cooldown_minutes, stale_after_minutes=None):
                      < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
                   OR (fetch_locks.started_at
                         < (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s)
+                      -- no run has finished since this lock was taken (a
+                      -- failed run moves its lock back but did finish)
                       AND NOT EXISTS (SELECT 1 FROM fetch_runs r
                                       WHERE r.name = fetch_locks.name
-                                        AND r.started_at = fetch_locks.started_at))
+                                        AND r.finished_at >= fetch_locks.started_at))
                RETURNING started_at""",
             (name, cooldown_minutes, stale_after_minutes or cooldown_minutes),
         )

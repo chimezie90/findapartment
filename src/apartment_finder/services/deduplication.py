@@ -4,12 +4,21 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import psycopg2
+from psycopg2.extras import execute_values
+
 from ..db import get_connection, init_db
 from ..models.apartment import Apartment
 
 logger = logging.getLogger(__name__)
 
 SQFT_PER_SQM = 10.764
+UPSERT_CHUNK_SIZE = 500
+INSERT_COLUMNS = (
+    "source_id, source_name, city, title, price_usd, url, thumbnail_url, "
+    "description, latitude, longitude, neighborhood, bedrooms, bathrooms, "
+    "size_sqm, amenities, posted_date, first_seen_at, last_seen_at"
+)
 
 
 def _listing_metadata(apt: Apartment) -> tuple:
@@ -51,78 +60,123 @@ class DeduplicationService:
         if not apartments:
             return []
 
-        new_apartments = []
+        # Last copy wins if a source returned the same listing twice
+        apartments = list({apt.source_id: apt for apt in apartments}.values())
+        unsent_ids = set()
+        skipped = 0
         now = datetime.utcnow()
 
         with get_connection() as conn:
             cur = conn.cursor()
-            for apt in apartments:
-                cur.execute(
-                    "SELECT source_id, sent_in_email FROM seen_listings WHERE source_id = %s",
-                    (apt.source_id,),
-                )
-                row = cur.fetchone()
-                meta = _listing_metadata(apt)
-
-                if row is None:
-                    cur.execute(
-                        """
-                        INSERT INTO seen_listings
-                        (source_id, source_name, city, title, price_usd, url,
-                         thumbnail_url, description, latitude, longitude, neighborhood,
-                         bedrooms, bathrooms, size_sqm, amenities, posted_date,
-                         first_seen_at, last_seen_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            apt.source_id,
-                            apt.source_name,
-                            apt.city,
-                            apt.title,
-                            apt.price_usd,
-                            apt.url,
-                            apt.thumbnail_url,
-                            apt.description,
-                            apt.latitude,
-                            apt.longitude,
-                            apt.neighborhood,
-                            *meta,
-                            now,
-                            now,
-                        ),
-                    )
-                    new_apartments.append(apt)
+            for start in range(0, len(apartments), UPSERT_CHUNK_SIZE):
+                chunk = apartments[start:start + UPSERT_CHUNK_SIZE]
+                # One statement per chunk: per-row queries cost minutes on a
+                # remote database (a Berlin run of ~1,300 listings timed out
+                # at 15 min on Replit)
+                cur.execute("SAVEPOINT listing_chunk")
+                try:
+                    unsent_ids.update(self._upsert_chunk(cur, chunk, now))
+                    cur.execute("RELEASE SAVEPOINT listing_chunk")
                     continue
+                except psycopg2.Error as e:
+                    cur.execute("ROLLBACK TO SAVEPOINT listing_chunk")
+                    logger.warning(f"Chunk upsert failed ({e}); retrying {len(chunk)} listings one by one")
+                for apt in chunk:
+                    cur.execute("SAVEPOINT listing_row")
+                    try:
+                        if self._upsert_one(cur, apt, now):
+                            unsent_ids.add(apt.source_id)
+                        cur.execute("RELEASE SAVEPOINT listing_row")
+                    except psycopg2.Error as e:
+                        cur.execute("ROLLBACK TO SAVEPOINT listing_row")
+                        skipped += 1
+                        logger.warning(f"Skipped listing {apt.source_id}: {e}")
 
-                # Seen again: refresh liveness and price, backfill missing data.
-                # Re-appearing in a scrape means the listing is live again
-                # (e.g. a Balder unit that went Reserveret -> Ledig).
-                cur.execute(
-                    """UPDATE seen_listings
-                       SET last_seen_at = %s,
-                           status = 'active',
-                           price_usd = COALESCE(%s, price_usd),
-                           thumbnail_url = COALESCE(thumbnail_url, %s),
-                           description = COALESCE(description, %s),
-                           latitude = COALESCE(latitude, %s),
-                           longitude = COALESCE(longitude, %s),
-                           neighborhood = COALESCE(neighborhood, %s),
-                           bedrooms = COALESCE(bedrooms, %s),
-                           bathrooms = COALESCE(bathrooms, %s),
-                           size_sqm = COALESCE(size_sqm, %s),
-                           amenities = COALESCE(amenities, %s),
-                           posted_date = COALESCE(posted_date, %s)
-                       WHERE source_id = %s""",
-                    (now, apt.price_usd, apt.thumbnail_url, apt.description,
-                     apt.latitude, apt.longitude, apt.neighborhood, *meta,
-                     apt.source_id),
-                )
-                if not row["sent_in_email"]:
-                    new_apartments.append(apt)
-
-        logger.info(f"Filtered {len(apartments)} listings to {len(new_apartments)} new ones")
+        new_apartments = [apt for apt in apartments if apt.source_id in unsent_ids]
+        logger.info(
+            f"Filtered {len(apartments)} listings to {len(new_apartments)} new ones ({skipped} skipped)"
+        )
         return new_apartments
+
+    @staticmethod
+    def _row(apt: Apartment, now: datetime) -> tuple:
+        return (
+            apt.source_id, apt.source_name, apt.city, apt.title, apt.price_usd,
+            apt.url, apt.thumbnail_url, apt.description, apt.latitude,
+            apt.longitude, apt.neighborhood, *_listing_metadata(apt), now, now,
+        )
+
+    @classmethod
+    def _upsert_chunk(cls, cur, apartments: List[Apartment], now: datetime) -> List[str]:
+        """Insert or refresh many listings in one statement; returns the ids
+        not yet emailed (new ones included). Same rules as _upsert_one."""
+        rows = execute_values(
+            cur,
+            f"""
+            INSERT INTO seen_listings ({INSERT_COLUMNS})
+            VALUES %s
+            ON CONFLICT (source_id) DO UPDATE SET
+                last_seen_at = EXCLUDED.last_seen_at,
+                status = 'active',
+                price_usd = COALESCE(EXCLUDED.price_usd, seen_listings.price_usd),
+                thumbnail_url = COALESCE(seen_listings.thumbnail_url, EXCLUDED.thumbnail_url),
+                description = COALESCE(seen_listings.description, EXCLUDED.description),
+                latitude = COALESCE(seen_listings.latitude, EXCLUDED.latitude),
+                longitude = COALESCE(seen_listings.longitude, EXCLUDED.longitude),
+                neighborhood = COALESCE(seen_listings.neighborhood, EXCLUDED.neighborhood),
+                bedrooms = COALESCE(seen_listings.bedrooms, EXCLUDED.bedrooms),
+                bathrooms = COALESCE(seen_listings.bathrooms, EXCLUDED.bathrooms),
+                size_sqm = COALESCE(seen_listings.size_sqm, EXCLUDED.size_sqm),
+                amenities = COALESCE(seen_listings.amenities, EXCLUDED.amenities),
+                posted_date = COALESCE(seen_listings.posted_date, EXCLUDED.posted_date)
+            RETURNING source_id, sent_in_email
+            """,
+            [cls._row(apt, now) for apt in apartments],
+            page_size=len(apartments),
+            fetch=True,
+        )
+        return [row["source_id"] for row in rows if not row["sent_in_email"]]
+
+    @classmethod
+    def _upsert_one(cls, cur, apt: Apartment, now: datetime) -> bool:
+        """Insert or refresh one listing. Returns True if not yet emailed."""
+        cur.execute(
+            "SELECT sent_in_email FROM seen_listings WHERE source_id = %s",
+            (apt.source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            placeholders = ", ".join(["%s"] * len(cls._row(apt, now)))
+            cur.execute(
+                f"INSERT INTO seen_listings ({INSERT_COLUMNS}) VALUES ({placeholders})",
+                cls._row(apt, now),
+            )
+            return True
+
+        # Seen again: refresh liveness and price, backfill missing data.
+        # Re-appearing in a scrape means the listing is live again
+        # (e.g. a Balder unit that went Reserveret -> Ledig).
+        cur.execute(
+            """UPDATE seen_listings
+               SET last_seen_at = %s,
+                   status = 'active',
+                   price_usd = COALESCE(%s, price_usd),
+                   thumbnail_url = COALESCE(thumbnail_url, %s),
+                   description = COALESCE(description, %s),
+                   latitude = COALESCE(latitude, %s),
+                   longitude = COALESCE(longitude, %s),
+                   neighborhood = COALESCE(neighborhood, %s),
+                   bedrooms = COALESCE(bedrooms, %s),
+                   bathrooms = COALESCE(bathrooms, %s),
+                   size_sqm = COALESCE(size_sqm, %s),
+                   amenities = COALESCE(amenities, %s),
+                   posted_date = COALESCE(posted_date, %s)
+               WHERE source_id = %s""",
+            (now, apt.price_usd, apt.thumbnail_url, apt.description,
+             apt.latitude, apt.longitude, apt.neighborhood, *_listing_metadata(apt),
+             apt.source_id),
+        )
+        return not row["sent_in_email"]
 
     def mark_as_sent(self, apartments: List[Apartment]) -> None:
         """Mark listings as sent in email."""

@@ -271,6 +271,23 @@ def init_db():
         # hardcoded demo listings (boligportal_cph_001..005) whenever its
         # scrape failed, and they showed up on the site as real listings.
         # Idempotent; delete this block once it has run in prod.
+        # One-time rename: the partner's ratings and notes were stored under
+        # their first name; the UI now uses "Partner". The site has two
+        # authors, so any other name (bar "Anonymous" comments) is theirs.
+        # Idempotent; delete this block once it has run in prod.
+        known_authors = ["Emmanuel", "Partner", "Anonymous"]
+        cur.execute(
+            """
+            UPDATE ratings r SET author = 'Partner'
+            WHERE r.author <> ALL(%s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM ratings p WHERE p.listing_id = r.listing_id AND p.author = 'Partner'
+              )
+            """,
+            (known_authors,),
+        )
+        cur.execute("UPDATE comments SET author = 'Partner' WHERE author <> ALL(%s)", (known_authors,))
+
         demo_ids = [f"boligportal_cph_{n:03d}" for n in range(1, 6)]
         cur.execute("DELETE FROM ratings WHERE listing_id = ANY(%s)", (demo_ids,))
         cur.execute("DELETE FROM comments WHERE listing_id = ANY(%s)", (demo_ids,))

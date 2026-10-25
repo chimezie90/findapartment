@@ -95,6 +95,30 @@ cities:
       # Ørestad/Østerbro via search.preferred_neighborhoods above.
       areas: []
 
+  berlin:
+    display_name: "Berlin"
+    currency: EUR
+    # ~EUR 1,200-3,500/mo warm (EUR/USD 1.12, Oct 2026). The global budget
+    # is Copenhagen-tuned and would hide most Berlin flats.
+    budget:
+      min_usd: 1345
+      max_usd: 3920
+    sources:
+      - inberlinwohnen
+      - kleinanzeigen
+      - wggesucht
+    # inberlinwohnen: state-owned landlords (degewo, Gewobag, HOWOGE, ...);
+    # walks the whole catalog, no settings. Prices are warm rent. Check each
+    # listing's WBS line: "erforderlich" needs a social-housing permit.
+    kleinanzeigen:
+      location: berlin
+      location_id: c203l3331   # 203 = Mietwohnungen, l3331 = Berlin
+      max_pages: 50            # site cap; 27 ads/page, newest first
+    wggesucht:
+      city_slug: Berlin
+      city_id: 8
+      max_pages: 15            # ~28 whole-flat ads/page; many are sublets
+
   sri_lanka:
     display_name: "Sri Lanka"
     currency: LKR

@@ -295,6 +295,7 @@
         .tag-lisbon { background: #eafaf1; color: #27ae60; }
         .tag-la { background: #fff0f5; color: #d63384; }
         .tag-copenhagen { background: #e8f5e9; color: #388e3c; }
+        .tag-berlin { background: #eceff1; color: #455a64; }
         .tag-bali { background: #fff8e1; color: #ff6f00; }
 
         .tag-craigslist { background: #f3e5f5; color: #8e24aa; }
@@ -618,6 +619,7 @@
                     <option value="dubai">Dubai</option>
                     <option value="lisbon">Lisbon</option>
                     <option value="copenhagen">Copenhagen</option>
+                    <option value="berlin">Berlin</option>
                     <option value="bali">Bali</option>
                     <option value="sri_lanka">Sri Lanka</option>
                 </select>
@@ -742,6 +744,7 @@
             'Dubai': { lat: 25.2048, lng: 55.2708 },
             'Lisbon': { lat: 38.7223, lng: -9.1393 },
             'Copenhagen': { lat: 55.6761, lng: 12.5683 },
+            'Berlin': { lat: 52.5200, lng: 13.4050 },
             'Bali': { lat: -8.4095, lng: 115.1889 }
         };
 
@@ -832,6 +835,7 @@
             'dubai': 'PropertyFinder',
             'lisbon': 'CasaSapo',
             'copenhagen': 'Balder, Lejebolig, Boligportal',
+            'berlin': 'inberlinwohnen, Kleinanzeigen, WG-Gesucht',
             'bali': 'Rumah123',
             'sri_lanka': 'LankaPropertyWeb'
         };
@@ -1040,6 +1044,7 @@
             if (city?.includes('Lisbon')) return 'tag-lisbon';
             if (city?.includes('Los Angeles') || city?.includes('LA')) return 'tag-la';
             if (city?.includes('Copenhagen')) return 'tag-copenhagen';
+            if (city?.includes('Berlin')) return 'tag-berlin';
             if (city?.includes('Bali')) return 'tag-bali';
             return '';
         }

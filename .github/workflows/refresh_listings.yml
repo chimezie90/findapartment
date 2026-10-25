@@ -112,7 +112,7 @@ jobs:
         if: contains(fromJSON('["all","apartments","twice-daily"]'), steps.plan.outputs.what)
         run: |
           failed=0
-          for city in copenhagen nyc la dubai lisbon bali sri_lanka; do
+          for city in copenhagen berlin nyc la dubai lisbon bali sri_lanka; do
             python3 run_job.py /api/fetch "{\"city\":\"$city\"}" "apartments:$city" 20 || failed=1
           done
           exit $failed

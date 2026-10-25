@@ -898,6 +898,7 @@ CITY_MEDIAN_RENT = {
     'Dubai': 2000,
     'Lisbon': 1200,
     'Copenhagen': 1800,
+    'Berlin': 1700,  # ~EUR 1,500 warm for a new 2-room lease
     'Bali': 800,
 }
 
@@ -1453,12 +1454,12 @@ def api_fetch():
 
     # Cities with at least one working scraper. The actual source list per
     # city comes from config/config.yaml, not from this endpoint.
-    working_cities = {'nyc', 'la', 'dubai', 'copenhagen', 'lisbon', 'bali', 'sri_lanka'}
+    working_cities = {'nyc', 'la', 'dubai', 'copenhagen', 'berlin', 'lisbon', 'bali', 'sri_lanka'}
 
     if city not in working_cities:
         return jsonify({
             'success': False,
-            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Lisbon, Bali, and Sri Lanka have real listings.'
+            'error': f'No working scraper for {city} yet. Only NYC, LA, Dubai, Copenhagen, Berlin, Lisbon, Bali, and Sri Lanka have real listings.'
         }), 400
 
     return _start_fetch(f'apartments:{city}', ['--city', city], cooldown_minutes=APARTMENT_FETCH_COOLDOWN_MINUTES,

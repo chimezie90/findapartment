@@ -50,6 +50,9 @@ for _name in [
     "casasapo",
     "rumah123",
     "lankapropertyweb",
+    "inberlinwohnen",
+    "kleinanzeigen",
+    "wggesucht",
 ]:
     try:
         _importlib.import_module(f".{_name}", __name__)
